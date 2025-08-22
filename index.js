@@ -137,7 +137,7 @@ async function run() {
             }
         });
 
-        app.get("/packages/:id", verifyFBToken, async (req, res) => {
+        app.get("/packages/:id", async (req, res) => {
             console.log('headers in add packages', req.headers);
 
             try {
@@ -154,6 +154,25 @@ async function run() {
                 res.status(500).send({ message: error.message });
             }
         });
+
+        // app.get('/packages/:id', async (req, res) => {
+        //     try {
+        //         const id = req.params.id;
+
+        //         const query = { _id: new ObjectId(id) };
+        //         const parcel = await packagesCollection.findOne(query);
+
+        //         if (!parcel) {
+        //             return res.status(404).send({ message: 'Parcel not found' });
+        //         }
+
+        //         res.send(parcel);
+        //     } catch (error) {
+        //         console.error('Error fetching parcel by ID:', error);
+        //         res.status(500).send({ message: 'Failed to get parcel' });
+        //     }
+        // })
+
 
         // ---------------bookings---------
 
@@ -183,7 +202,7 @@ async function run() {
             }
         });
 
-        // DELETE: Remove a parcel by ID
+        // DELETE: Remove a booking by ID
         app.delete('/bookings/:id', async (req, res) => {
             try {
                 const id = req.params.id;

@@ -172,7 +172,7 @@ async function run() {
             }
         });
 
-        // GET: Get bookings for logged-in user
+        // By UID
         app.get("/bookings/user/:userId", async (req, res) => {
             try {
                 const { userId } = req.params;

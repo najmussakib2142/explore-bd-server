@@ -183,6 +183,29 @@ async function run() {
             }
         });
 
+        // DELETE: Remove a parcel by ID
+        app.delete('/bookings/:id', async (req, res) => {
+            try {
+                const id = req.params.id;
+
+                // Convert the string ID into MongoDB ObjectId
+                const query = { _id: new ObjectId(id) };
+
+                const result = await bookingsCollection.deleteOne(query);
+
+                if (result.deletedCount === 0) {
+                    return res.status(404).send({ message: 'Booking not found' });
+                }
+
+                res.send({ message: 'Booking deleted successfully', result });
+            } catch (error) {
+                console.error('Error deleting Booking:', error);
+                res.status(500).send({ message: 'Failed to delete Booking' });
+            }
+        });
+
+
+
 
 
         // --------------guides--------------

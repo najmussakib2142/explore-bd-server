@@ -45,6 +45,7 @@ async function run() {
         const guidesCollection = db.collection('guides')
         const bookingsCollection = db.collection('bookings')
         const paymentsCollection = db.collection('payments');
+        const storiesCollection = db.collection('stories');
 
 
 
@@ -157,23 +158,23 @@ async function run() {
             }
         });
 
-        // app.get('/packages/:id', async (req, res) => {
-        //     try {
-        //         const id = req.params.id;
+        app.get('/packages/:id', async (req, res) => {
+            try {
+                const id = req.params.id;
 
-        //         const query = { _id: new ObjectId(id) };
-        //         const parcel = await packagesCollection.findOne(query);
+                const query = { _id: new ObjectId(id) };
+                const parcel = await packagesCollection.findOne(query);
 
-        //         if (!parcel) {
-        //             return res.status(404).send({ message: 'Parcel not found' });
-        //         }
+                if (!parcel) {
+                    return res.status(404).send({ message: 'Parcel not found' });
+                }
 
-        //         res.send(parcel);
-        //     } catch (error) {
-        //         console.error('Error fetching parcel by ID:', error);
-        //         res.status(500).send({ message: 'Failed to get parcel' });
-        //     }
-        // })
+                res.send(parcel);
+            } catch (error) {
+                console.error('Error fetching parcel by ID:', error);
+                res.status(500).send({ message: 'Failed to get parcel' });
+            }
+        })
 
 
         // ---------------bookings---------
@@ -454,6 +455,81 @@ async function run() {
                 res.status(500).json({ error: error.message });
             }
         });
+
+        // ---------------- Stories-----------------
+        app.get("/stories/random", async (req, res) => {
+            const count = await storiesCollection.countDocuments();
+            const randomStories = await storiesCollection.aggregate([
+                { $sample: { size: 4 } }
+            ]).toArray();
+            res.send(randomStories);
+        });
+
+        // GET all stories
+        app.get("/stories", async (req, res) => {
+            const stories = await storiesCollection.find().sort({ createdAt: -1 }).toArray();
+            res.send(stories);
+        });
+
+        app.post('/stories', async (req, res) => {
+            try {
+                const storyData = req.body;
+
+                // Destructure required fields
+                const { title, description, images, createdBy } = storyData;
+
+                // Validate required fields
+                if (!title || !description || !createdBy || !createdBy.email) {
+                    return res.status(400).json({ message: 'Title, description, and createdBy (with email) are required' });
+                }
+
+                // Ensure images is an array
+                if (!images || !Array.isArray(images) || images.length === 0) {
+                    return res.status(400).json({ message: 'At least one image is required' });
+                }
+
+                // Add timestamp
+                storyData.createdAt = new Date();
+
+                // Insert into MongoDB
+                const result = await storiesCollection.insertOne(storyData);
+
+                res.status(201).json({
+                    message: 'Story added successfully',
+                    insertedId: result.insertedId,
+                });
+            } catch (err) {
+                console.error('Error adding story:', err);
+                res.status(500).json({ message: 'Failed to add story' });
+            }
+        });
+
+
+        // app.post('/stories', async (req, res) => {
+        //     try {
+        //         const storyData = req.body;
+        //         // Validate required fields
+        //         const { title, content, images, author, role } = storyData;
+        //         if (!title || !content || !author) {
+        //             return res.status(400).json({ message: 'Title, content and author are required' });
+        //         }
+
+        //         // Add createdAt field
+        //         storyData.createdAt = new Date();
+
+        //         // Insert into MongoDB
+        //         const result = await storiesCollection.insertOne(storyData);
+
+        //         res.status(201).json({
+        //             message: 'Story added successfully',
+        //             insertedId: result.insertedId,
+        //         });
+        //     } catch (err) {
+        //         console.error('Error adding story:', err);
+        //         res.status(500).json({ message: 'Failed to add story' });
+        //     }
+        // });
+
 
 
 

@@ -6,7 +6,7 @@ const admin = require("firebase-admin");
 
 
 dotenv.config();
-
+const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY);
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -44,6 +44,8 @@ async function run() {
         const usersCollection = db.collection('users')
         const guidesCollection = db.collection('guides')
         const bookingsCollection = db.collection('bookings')
+        const paymentsCollection = db.collection('payments');
+
 
 
         const verifyFBToken = async (req, res, next) => {
@@ -191,11 +193,33 @@ async function run() {
             }
         });
 
+        // GET booking by bookingId
+        app.get('/bookings/:bookingId', async (req, res) => {
+            try {
+                const { bookingId } = req.params;
+
+                // Make sure you import ObjectId from mongodb
+                const booking = await bookingsCollection.findOne({ _id: new ObjectId(bookingId) });
+
+                if (!booking) {
+                    return res.status(404).send({ message: 'Booking not found' });
+                }
+
+                res.send(booking);
+            } catch (error) {
+                console.error('Error fetching booking:', error);
+                res.status(500).send({ message: 'Failed to get booking' });
+            }
+        });
+
         // By UID
         app.get("/bookings/user/:userId", async (req, res) => {
             try {
                 const { userId } = req.params;
+                // const { email: created_by } = req.params;
+                // console.log(email);
                 const bookings = await bookingsCollection.find({ userId }).toArray();
+                // const bookings = await bookingsCollection.find({ created_by }).toArray();
                 res.json(bookings);
             } catch (err) {
                 res.status(500).json({ message: "Failed to fetch bookings" });
@@ -343,6 +367,94 @@ async function run() {
                 res.status(500).send({ message: error.message });
             }
         });
+
+
+        //_-------------- payment----------------
+
+        app.get('/payments', verifyFBToken, async (req, res) => {
+
+            // console.log('headers in payment', req.headers);
+
+            try {
+                const userEmail = req.query.email;
+
+                // decoded email
+                console.log('decoded', req.decoded);
+                if (req.decoded.email !== userEmail) {
+                    return res.status(403).send({ message: 'forbidden access' })
+                }
+
+                const query = userEmail ? { email: userEmail } : {};
+                const options = { sort: { paid_at: -1 } }
+                const payments = await bookingsCollection.find(query, options).toArray()
+                res.send(payments)
+            } catch (error) {
+                console.error('Error fetching payment history:', error);
+                res.status(500).send({ message: 'Failed to get payments' });
+            }
+        })
+
+
+        app.post('/payments', async (req, res) => {
+            try {
+                const { packageId, bookingId, email, amount, paymentMethod, transactionId } = req.body;
+
+                // 1. Update parcel's payment_status
+                const updateResult = await bookingsCollection.updateOne(
+                    { _id: new ObjectId(bookingId) },
+                    // { packageId: packageId, email: user.email }, 
+                    {
+                        $set: {
+                            payment_status: 'paid'
+                        }
+                    }
+                );
+
+                if (updateResult.modifiedCount === 0) {
+                    return res.status(404).send({ message: 'Parcel not found or already paid' });
+                }
+
+                // 2. Insert payment record
+                const paymentDoc = {
+                    packageId,
+                    email,
+                    amount,
+                    paymentMethod,
+                    transactionId,
+                    paid_at_string: new Date().toISOString(),
+                    paid_at: new Date(),
+                };
+
+                const paymentResult = await paymentsCollection.insertOne(paymentDoc);
+
+                res.status(201).send({
+                    message: 'Payment recorded and parcel marked as paid',
+                    insertedId: paymentResult.insertedId,
+                });
+
+            } catch (error) {
+                console.error('Payment processing failed:', error);
+                res.status(500).send({ message: 'Failed to record payment' });
+            }
+        });
+
+
+
+        app.post('/create-payment-intent', async (req, res) => {
+            const amountInCents = req.body.amountInCents
+            try {
+                const paymentIntent = await stripe.paymentIntents.create({
+                    amount: amountInCents, // Amount in cents
+                    currency: 'usd',
+                    payment_method_types: ['card'],
+                });
+
+                res.json({ clientSecret: paymentIntent.client_secret });
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
 
 
         // Send a ping to confirm a successful connection

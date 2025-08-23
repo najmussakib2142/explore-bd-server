@@ -53,10 +53,12 @@ async function run() {
             // console.log('header in middleware', req.headers);
             const authHeader = req.headers.authorization;
             if (!authHeader) {
+                console.log("Missing authorization header");
                 return res.status(401).send({ message: 'unauthorized access' })
             }
-            const token = authHeader.split(' ')[1];
+            const token = authHeader.split(" ")[1];
             if (!token) {
+                console.log("Missing token");
                 return res.status(401).send({ message: 'unauthorized access' })
             }
 
@@ -67,6 +69,7 @@ async function run() {
                 next();
             }
             catch (error) {
+                console.error("Token verification failed:", error);
                 return res.status(401).send({ message: 'unauthorized access' })
             }
 
@@ -76,6 +79,18 @@ async function run() {
 
 
         // -----------------------USERS--------------------
+
+        app.get('/users/:email', async (req, res) => {
+            try {
+                const { email } = req.params;
+                const user = await usersCollection.findOne({ email });
+                if (!user) return res.status(404).json({ message: "User not found" });
+                res.json(user);
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ message: "Something went wrong" });
+            }
+        })
 
         app.post('/users', async (req, res) => {
             const email = req.body.email;
@@ -125,7 +140,7 @@ async function run() {
 
         // ✅ POST: Add new package
         app.post("/packages", async (req, res) => {
-            console.log('headers in add packages', req.headers);
+            // console.log('headers in add packages', req.headers);
             try {
                 const newPackage = req.body;
 
@@ -160,7 +175,7 @@ async function run() {
         });
 
         app.get("/packages/random", async (req, res) => {
-            console.log('headers in add packages', req.headers);
+            // console.log('headers in add packages', req.headers);
 
             try {
                 const packages = await packagesCollection.aggregate([{ $sample: { size: 3 } }]).toArray();
@@ -170,8 +185,9 @@ async function run() {
             }
         });
 
-        app.get("/packages/:id", async (req, res) => {
-            console.log('headers in add packages', req.headers);
+        app.get("/packages/:id", verifyFBToken, async (req, res) => {
+            // console.log('headers in /packages/:id', req.headers);
+            // console.log('headers in add packages', req.headers);
 
             try {
                 const id = req.params.id;
@@ -188,7 +204,7 @@ async function run() {
             }
         });
 
-        app.get('/packages/:id', async (req, res) => {
+        app.get('/packages/:id', verifyFBToken, async (req, res) => {
             try {
                 const id = req.params.id;
 
@@ -309,6 +325,32 @@ async function run() {
             }
         });
 
+
+        app.get("/guides/approved", verifyFBToken, async (req, res) => {
+            console.log('headers in /guides/approved', req.headers);
+            try {
+                const guides = await guidesCollection.find({ status: "active" }).toArray();
+                res.json(guides);
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ message: "Failed to fetch approved guides" });
+            }
+        });
+
+
+
+
+
+        app.get("/guides/random", async (req, res) => {
+            try {
+                const guides = await guidesCollection.aggregate([{ $sample: { size: 6 } }]).toArray();
+                res.json(guides);
+            } catch (error) {
+                res.status(500).send({ message: error.message });
+            }
+        });
+
+
         app.get("/guides/pending", async (req, res) => {
             try {
                 const pendingGuides = await guidesCollection
@@ -321,7 +363,29 @@ async function run() {
                 res.status(500).send({ message: "Failed to load pending guides" });
             }
         });
-        // GET /guides/approved
+
+
+        app.get("/guides/:id", async (req, res) => {
+            try {
+                const { id } = req.params;
+
+                // Validate ObjectId
+                if (!ObjectId.isValid(id)) {
+                    return res.status(400).json({ message: "Invalid guide id" });
+                }
+
+                const guide = await guidesCollection.findOne({ _id: new ObjectId(id) });
+
+                if (!guide) return res.status(404).json({ message: "Guide not found" });
+
+                res.json(guide);
+            } catch (err) {
+                console.error("Failed to fetch guide:", err);
+                res.status(500).json({ message: "Failed to fetch guide" });
+            }
+        });
+
+
         app.patch("/guides/:id/status", verifyFBToken, async (req, res) => {
             const { id } = req.params;
             const { status, email } = req.body;
@@ -354,16 +418,6 @@ async function run() {
         });
 
 
-        app.get("/guides/approved", async (req, res) => {
-            try {
-                const guides = await guidesCollection.find({ status: "active" }).toArray();
-                res.json(guides);
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ message: "Failed to fetch approved guides" });
-            }
-        });
-
 
 
 
@@ -390,14 +444,6 @@ async function run() {
         });
 
 
-        app.get("/guides/random", async (req, res) => {
-            try {
-                const guides = await guidesCollection.aggregate([{ $sample: { size: 6 } }]).toArray();
-                res.json(guides);
-            } catch (error) {
-                res.status(500).send({ message: error.message });
-            }
-        });
 
 
         //_-------------- payment----------------
@@ -487,19 +533,6 @@ async function run() {
         });
 
         // ---------------- Stories-----------------
-        app.get("/stories", async (req, res) => {
-            const stories = await storiesCollection.find().sort({ createdAt: -1 }).toArray();
-            res.send(stories);
-        });
-        app.get("/stories/random", async (req, res) => {
-            const count = await storiesCollection.countDocuments();
-            const randomStories = await storiesCollection.aggregate([
-                { $sample: { size: 4 } }
-            ]).toArray();
-            res.send(randomStories);
-        });
-
-        // GET all stories
 
         app.post('/stories', async (req, res) => {
             try {
@@ -533,6 +566,39 @@ async function run() {
                 res.status(500).json({ message: 'Failed to add story' });
             }
         });
+
+
+        // BE CAREFUL , CHECK TWICH FOR PUT NEW API AROUND THIS
+        app.get("/stories/random", async (req, res) => {
+            const count = await storiesCollection.countDocuments();
+            const randomStories = await storiesCollection.aggregate([
+                { $sample: { size: 4 } }
+            ]).toArray();
+            res.send(randomStories);
+        });
+
+
+        app.get("/stories", async (req, res) => {
+            const stories = await storiesCollection.find().sort({ createdAt: -1 }).toArray();
+            res.send(stories);
+        });
+
+
+
+
+        app.get("/stories/guide/:email", async (req, res) => {
+            const { email } = req.params;
+            try {
+                const stories = await storiesCollection
+                    .find({ "createdBy.email": email })
+                    .toArray();
+                res.json(stories);
+            } catch (err) {
+                res.status(500).json({ message: "Failed to fetch guide stories" });
+            }
+        });
+
+        
 
         app.patch("/stories/:id/like", async (req, res) => {
             try {

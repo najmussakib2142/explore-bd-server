@@ -75,6 +75,7 @@ async function run() {
 
 
 
+        // -----------------------USERS--------------------
 
         app.post('/users', async (req, res) => {
             const email = req.body.email;
@@ -92,6 +93,35 @@ async function run() {
             const result = await usersCollection.insertOne(user);
             res.send(result)
         })
+
+        app.patch("/users/:email", async (req, res) => {
+            const email = req.params.email;
+            const updateData = req.body;
+
+            try {
+                const result = await usersCollection.updateOne(
+                    { email }, // find user by email
+                    { $set: updateData } // update fields
+                );
+
+                res.send({
+                    success: true,
+                    message: "User updated successfully",
+                    result,
+                });
+            } catch (err) {
+                res.status(500).send({
+                    success: false,
+                    message: "Failed to update user",
+                    error: err.message,
+                });
+            }
+        });
+
+
+
+        // __________________________ packages -_________________________
+
 
         // ✅ POST: Add new package
         app.post("/packages", async (req, res) => {
@@ -457,6 +487,10 @@ async function run() {
         });
 
         // ---------------- Stories-----------------
+        app.get("/stories", async (req, res) => {
+            const stories = await storiesCollection.find().sort({ createdAt: -1 }).toArray();
+            res.send(stories);
+        });
         app.get("/stories/random", async (req, res) => {
             const count = await storiesCollection.countDocuments();
             const randomStories = await storiesCollection.aggregate([
@@ -466,10 +500,6 @@ async function run() {
         });
 
         // GET all stories
-        app.get("/stories", async (req, res) => {
-            const stories = await storiesCollection.find().sort({ createdAt: -1 }).toArray();
-            res.send(stories);
-        });
 
         app.post('/stories', async (req, res) => {
             try {
@@ -503,6 +533,42 @@ async function run() {
                 res.status(500).json({ message: 'Failed to add story' });
             }
         });
+
+        app.patch("/stories/:id/like", async (req, res) => {
+            try {
+                const { id } = req.params;
+                const { userId } = req.body;
+
+                if (!userId) {
+                    return res.status(400).json({ message: "Invalid userId" });
+                }
+
+                const story = await storiesCollection.findOne({ _id: new ObjectId(id) });
+                if (!story) return res.status(404).json({ message: "Story not found" });
+
+                let updatedLikes;
+
+                if (story.likes?.includes(userId)) {
+                    // Unlike
+                    updatedLikes = story.likes.filter((id) => id !== userId);
+                } else {
+                    // Like
+                    updatedLikes = [...(story.likes || []), userId];
+                }
+
+                await storiesCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { likes: updatedLikes } }
+                );
+
+                res.json({ likes: updatedLikes });
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ message: "Something went wrong" });
+            }
+        });
+
+
 
 
         // app.post('/stories', async (req, res) => {

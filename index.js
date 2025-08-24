@@ -80,6 +80,28 @@ async function run() {
 
         // -----------------------USERS--------------------
 
+        app.get("/users/search", async (req, res) => {
+            const emailQuery = req.query.email;
+            if (!emailQuery) {
+                return res.status(400).send({ message: "Missing email query" });
+            }
+
+            const regex = new RegExp(emailQuery, "i"); // case-insensitive partial match
+
+            try {
+                const users = await usersCollection
+                    .find({ email: { $regex: regex } })
+                    // .project({ email: 1, createdAt: 1, role: 1 })
+                    .limit(10)
+                    .toArray();
+                res.send(users);
+            } catch (error) {
+                console.error("Error searching users", error);
+                res.status(500).send({ message: "Error searching users" });
+            }
+        });
+
+
         app.get('/users/:email', async (req, res) => {
             try {
                 const { email } = req.params;
@@ -133,6 +155,27 @@ async function run() {
             }
         });
 
+        app.patch("/users/:id/role", verifyFBToken, async (req, res) => {
+            const { id } = req.params;
+            const { role } = req.body;
+
+            if (!["admin", "user"].includes(role)) {
+                return res.status(400).send({ message: "Invalid role" });
+            }
+
+            try {
+                const result = await usersCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { role } }
+                );
+                res.send({ message: `User role updated to ${role}`, result });
+            } catch (error) {
+                console.error("Error updating user role", error);
+                res.status(500).send({ message: "Failed to update user role" });
+            }
+        });
+
+
 
 
         // __________________________ packages -_________________________
@@ -165,14 +208,35 @@ async function run() {
         });
 
         // ✅ GET: All packages
+        // app.get("/packages", async (req, res) => {
+        //     try {
+        //         const result = await packagesCollection.find().toArray();
+        //         res.send(result);
+        //     } catch (error) {
+        //         res.status(500).send({ message: error.message });
+        //     }
+        // });
+
+        // GET all packages with pagination
         app.get("/packages", async (req, res) => {
             try {
-                const result = await packagesCollection.find().toArray();
-                res.send(result);
+                const page = parseInt(req.query.page) || 0;
+                const size = parseInt(req.query.size) || 6;
+
+                const count = await packagesCollection.countDocuments();
+                const packages = await packagesCollection
+                    .find()
+                    .skip(page * size)
+                    .limit(size)
+                    .toArray();
+
+                res.send({ packages, count });
             } catch (error) {
-                res.status(500).send({ message: error.message });
+                console.error("Error fetching packages:", error);
+                res.status(500).json({ error: "Failed to fetch packages" });
             }
         });
+
 
         app.get("/packages/random", async (req, res) => {
             // console.log('headers in add packages', req.headers);
@@ -185,7 +249,7 @@ async function run() {
             }
         });
 
-        app.get("/packages/:id", verifyFBToken, async (req, res) => {
+        app.get("/packages/:id", async (req, res) => {
             // console.log('headers in /packages/:id', req.headers);
             // console.log('headers in add packages', req.headers);
 
@@ -204,7 +268,7 @@ async function run() {
             }
         });
 
-        app.get('/packages/:id', verifyFBToken, async (req, res) => {
+        app.get('/packages/:id', async (req, res) => {
             try {
                 const id = req.params.id;
 
@@ -227,10 +291,12 @@ async function run() {
 
         // POST: Create a new booking
         app.post("/bookings", async (req, res) => {
+            const info = req.body;
+            console.log(info);
             try {
                 const bookingData = req.body;  // { userId, packageId, date, guests, ... }
-                bookingData.status = "pending";
-                bookingData.created_at = new Date();
+                // bookingData.status = "pending";
+                // bookingData.created_at = new Date();
 
                 const result = await bookingsCollection.insertOne(bookingData);
                 res.status(201).json({ message: "Booking created", insertedId: result.insertedId });
@@ -239,6 +305,23 @@ async function run() {
                 res.status(500).json({ message: "Failed to create booking" });
             }
         });
+
+        // backend/index.js or bookings.routes.js
+        app.get("/bookings", verifyFBToken, async (req, res) => {
+            try {
+                const email = req.query.email;
+                if (!email) {
+                    return res.status(400).json({ error: "Email is required" });
+                }
+
+                const bookings = await bookingsCollection.find({ created_by: email }).toArray();
+                res.json(bookings);
+            } catch (error) {
+                console.error("Error fetching bookings:", error);
+                res.status(500).json({ error: "Internal Server Error" });
+            }
+        });
+
 
         // GET booking by bookingId
         app.get('/bookings/:bookingId', async (req, res) => {
@@ -325,6 +408,21 @@ async function run() {
             }
         });
 
+        app.get("/guides/pending", async (req, res) => {
+            // console.log('headers 
+            // in /guides/approved', req.headers);
+            try {
+                const pendingGuides = await guidesCollection
+                    .find({ status: "pending" })
+                    .toArray();
+
+                res.send(pendingGuides);
+            } catch (error) {
+                console.error("Failed to load pending guides:", error);
+                res.status(500).send({ message: "Failed to load pending guides" });
+            }
+        });
+
 
         app.get("/guides/approved", verifyFBToken, async (req, res) => {
             console.log('headers in /guides/approved', req.headers);
@@ -350,40 +448,80 @@ async function run() {
             }
         });
 
-
-        app.get("/guides/pending", async (req, res) => {
-            try {
-                const pendingGuides = await guidesCollection
-                    .find({ status: "pending" })
-                    .toArray();
-
-                res.send(pendingGuides);
-            } catch (error) {
-                console.error("Failed to load pending guides:", error);
-                res.status(500).send({ message: "Failed to load pending guides" });
-            }
-        });
-
-
         app.get("/guides/:id", async (req, res) => {
             try {
                 const { id } = req.params;
-
-                // Validate ObjectId
-                if (!ObjectId.isValid(id)) {
-                    return res.status(400).json({ message: "Invalid guide id" });
-                }
-
                 const guide = await guidesCollection.findOne({ _id: new ObjectId(id) });
-
-                if (!guide) return res.status(404).json({ message: "Guide not found" });
-
+                if (!guide) return res.status(404).json({ error: "Guide not found" });
                 res.json(guide);
             } catch (err) {
-                console.error("Failed to fetch guide:", err);
-                res.status(500).json({ message: "Failed to fetch guide" });
+                res.status(500).json({ error: "Server error" });
             }
         });
+
+        // app.get("/guides/:id", async (req, res) => {
+        //     try {
+        //         const { id } = req.params;
+
+        //         // Validate ObjectId
+        //         if (!ObjectId.isValid(id)) {
+        //             return res.status(400).json({ message: "Invalid guide id" });
+        //         }
+
+        //         const guide = await guidesCollection.findOne({ _id: new ObjectId(id) });
+
+        //         if (!guide) {
+        //             console.warn(`Guide not found with id: ${id}`);
+        //             return res.status(404).json({ message: "Guide not found" });
+        //         }
+        //         res.json(guide);
+        //     } catch (err) {
+        //         console.error("Failed to fetch guide:", err);
+        //         res.status(500).json({ message: "Failed to fetch guide" });
+        //     }
+        // });
+
+        // app.get("/guides/:id", async (req, res) => {
+        //     const { id } = req.params;
+
+        //     if (!ObjectId.isValid(id)) {
+        //         return res.status(400).json({ message: "Invalid guide id" });
+        //     }
+
+        //     const guide = await guidesCollection.findOne({ _id: new ObjectId(id) });
+        //     if (!guide) return res.status(404).json({ message: "Guide not found" });
+
+        //     res.json(guide);
+        // });
+
+        // app.get("/guides/:id", async (req, res) => {
+        //     try {
+        //         const { id } = req.params;
+
+        //         let query;
+        //         if (ObjectId.isValid(id)) {
+        //             query = { _id: new ObjectId(id) };
+        //         } else {
+        //             query = { _id: id }; // fallback if _id is string
+        //         }
+
+        //         const guide = await guidesCollection.findOne(query);
+
+        //         if (!guide) {
+        //             return res.status(404).json({ message: "Guide not found" });
+        //         }
+
+        //         res.json(guide);
+        //     } catch (err) {
+        //         console.error("Failed to fetch guide:", err);
+        //         res.status(500).json({ message: "Failed to fetch guide" });
+        //     }
+        // });
+
+
+
+
+
 
 
         app.patch("/guides/:id/status", verifyFBToken, async (req, res) => {
@@ -413,7 +551,7 @@ async function run() {
 
                 res.send(result);
             } catch (err) {
-                res.status(500).send({ message: "Failed to update rider status" });
+                res.status(500).send({ message: "Failed to update guide status" });
             }
         });
 
@@ -448,28 +586,6 @@ async function run() {
 
         //_-------------- payment----------------
 
-        app.get('/payments', verifyFBToken, async (req, res) => {
-
-            // console.log('headers in payment', req.headers);
-
-            try {
-                const userEmail = req.query.email;
-
-                // decoded email
-                console.log('decoded', req.decoded);
-                if (req.decoded.email !== userEmail) {
-                    return res.status(403).send({ message: 'forbidden access' })
-                }
-
-                const query = userEmail ? { email: userEmail } : {};
-                const options = { sort: { paid_at: -1 } }
-                const payments = await bookingsCollection.find(query, options).toArray()
-                res.send(payments)
-            } catch (error) {
-                console.error('Error fetching payment history:', error);
-                res.status(500).send({ message: 'Failed to get payments' });
-            }
-        })
 
 
         app.post('/payments', async (req, res) => {
@@ -515,6 +631,30 @@ async function run() {
             }
         });
 
+        app.get('/payments', verifyFBToken, async (req, res) => {
+
+            console.log('headers in payment', req.headers);
+
+            try {
+                const userEmail = req.query.email;
+
+                // decoded email
+                console.log('decoded', req.decoded);
+                if (req.decoded.email !== userEmail) {
+                    return res.status(403).send({ message: 'forbidden access' })
+                }
+
+                const query = userEmail ? { email: userEmail } : {};
+                const options = { sort: { paid_at: -1 } }
+                const payments = await paymentsCollection.find(query, options).toArray()
+                res.send(payments)
+            } catch (error) {
+                console.error('Error fetching payment history:', error);
+                res.status(500).send({ message: 'Failed to get payments' });
+            }
+        })
+
+
 
 
         app.post('/create-payment-intent', async (req, res) => {
@@ -531,6 +671,9 @@ async function run() {
                 res.status(500).json({ error: error.message });
             }
         });
+
+
+
 
         // ---------------- Stories-----------------
 
@@ -598,7 +741,7 @@ async function run() {
             }
         });
 
-        
+
 
         app.patch("/stories/:id/like", async (req, res) => {
             try {

@@ -61,7 +61,6 @@ async function run() {
                 console.log("Missing token");
                 return res.status(401).send({ message: 'unauthorized access' })
             }
-
             // verify the token
             try {
                 const decoded = await admin.auth().verifyIdToken(token);
@@ -72,15 +71,21 @@ async function run() {
                 console.error("Token verification failed:", error);
                 return res.status(401).send({ message: 'unauthorized access' })
             }
-
-
         }
-
+        const verifyAdmin = async (req, res, next) => {
+            const email = req.decoded.email;
+            const query = { email }
+            const user = await usersCollection.findOne(query);
+            if (!user || user.role !== 'admin') {
+                return res.status(403).send({ message: 'forbidden access' })
+            }
+            next();
+        }
 
 
         // -----------------------USERS--------------------
 
-        app.get("/users/search", async (req, res) => {
+        app.get("/users/search", verifyFBToken, verifyAdmin, async (req, res) => {
             const emailQuery = req.query.email;
             if (!emailQuery) {
                 return res.status(400).send({ message: "Missing email query" });
@@ -98,6 +103,29 @@ async function run() {
             } catch (error) {
                 console.error("Error searching users", error);
                 res.status(500).send({ message: "Error searching users" });
+            }
+        });
+
+        // GET: Get user role by email
+        app.get('/users/:email/role', async (req, res) => {
+            try {
+                const email = req.params.email;
+
+                if (!email) {
+                    return res.status(400).send({ message: 'Email is required' });
+                }
+
+                const user = await usersCollection.findOne({ email });
+
+                if (!user) {
+                    return res.status(404).send({ message: 'User not found' });
+                }
+
+
+                res.send({ role: user.role || 'user' });
+            } catch (error) {
+                console.error('Error getting user role:', error);
+                res.status(500).send({ message: 'Failed to get role' });
             }
         });
 
@@ -182,7 +210,7 @@ async function run() {
 
 
         // ✅ POST: Add new package
-        app.post("/packages", async (req, res) => {
+        app.post("/packages", verifyFBToken, async (req, res) => {
             // console.log('headers in add packages', req.headers);
             try {
                 const newPackage = req.body;
@@ -306,6 +334,29 @@ async function run() {
             }
         });
 
+
+        // assign guide
+        app.get("/bookings", async (req, res) => {
+            try {
+                console.log("Query received:", req.query);
+
+                const { email, payment_status, status } = req.query;
+                const query = {};
+
+                // allow optional filters
+                if (email) query.created_by = email;   // NOTE: in your data it's "created_by"
+                if (payment_status) query.payment_status = payment_status;
+                if (status) query.status = status;
+
+                console.log("MongoDB query:", query);
+
+                const bookings = await bookingsCollection.find(query).toArray();
+                res.json(bookings);
+            } catch (error) {
+                console.error("Error fetching bookings:", error.message);
+                res.status(500).json({ error: "Failed to fetch bookings" });
+            }
+        });
         // backend/index.js or bookings.routes.js
         app.get("/bookings", verifyFBToken, async (req, res) => {
             try {
@@ -323,8 +374,11 @@ async function run() {
         });
 
 
+
+
+
         // GET booking by bookingId
-        app.get('/bookings/:bookingId', async (req, res) => {
+        app.get("/bookings/:bookingId", async (req, res) => {
             try {
                 const { bookingId } = req.params;
 
@@ -355,6 +409,37 @@ async function run() {
                 res.status(500).json({ message: "Failed to fetch bookings" });
             }
         });
+
+        // assign guide
+        app.patch("/bookings/:id/assign", async (req, res) => {
+            try {
+                const { id } = req.params;
+                const { guideId, guideEmail, guideName } = req.body;
+
+                const result = await bookingsCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    {
+                        $set: {
+                            guideId,
+                            guideEmail,
+                            guideName,
+                            status: "assigned",
+                            updated_at: new Date(),
+                        },
+                    }
+                );
+
+                if (result.modifiedCount === 0) {
+                    return res.status(404).send({ message: "Booking not found" });
+                }
+
+                res.send({ success: true, message: "Guide assigned successfully" });
+            } catch (error) {
+                console.error("Error assigning guide:", error);
+                res.status(500).send({ message: "Failed to assign guide" });
+            }
+        });
+
 
         // DELETE: Remove a booking by ID
         app.delete('/bookings/:id', async (req, res) => {
@@ -423,8 +508,8 @@ async function run() {
             }
         });
 
-
-        app.get("/guides/approved", verifyFBToken, async (req, res) => {
+        // DO NOT USE ANY VERIFICATION HERE
+        app.get("/guides/approved", async (req, res) => {
             console.log('headers in /guides/approved', req.headers);
             try {
                 const guides = await guidesCollection.find({ status: "active" }).toArray();
@@ -437,11 +522,33 @@ async function run() {
 
 
 
+        // assign guide
+        app.get("/guides/available", async (req, res) => {
+            const { district } = req.query;
+
+            try {
+                const guides = await guidesCollection
+                    .find({
+                        district,
+                        status: { $in: ["approved", "active"] },
+                        // work_status: "available",
+                    })
+                    .toArray();
+
+                res.send(guides);
+            } catch (err) {
+                res.status(500).send({ message: "Failed to load guides" });
+            }
+        });
+
 
 
         app.get("/guides/random", async (req, res) => {
             try {
-                const guides = await guidesCollection.aggregate([{ $sample: { size: 6 } }]).toArray();
+                const guides = await guidesCollection.aggregate([
+                    { $match: { status: "active" } },
+                    { $sample: { size: 6 } }
+                ]).toArray();
                 res.json(guides);
             } catch (error) {
                 res.status(500).send({ message: error.message });
@@ -458,67 +565,6 @@ async function run() {
                 res.status(500).json({ error: "Server error" });
             }
         });
-
-        // app.get("/guides/:id", async (req, res) => {
-        //     try {
-        //         const { id } = req.params;
-
-        //         // Validate ObjectId
-        //         if (!ObjectId.isValid(id)) {
-        //             return res.status(400).json({ message: "Invalid guide id" });
-        //         }
-
-        //         const guide = await guidesCollection.findOne({ _id: new ObjectId(id) });
-
-        //         if (!guide) {
-        //             console.warn(`Guide not found with id: ${id}`);
-        //             return res.status(404).json({ message: "Guide not found" });
-        //         }
-        //         res.json(guide);
-        //     } catch (err) {
-        //         console.error("Failed to fetch guide:", err);
-        //         res.status(500).json({ message: "Failed to fetch guide" });
-        //     }
-        // });
-
-        // app.get("/guides/:id", async (req, res) => {
-        //     const { id } = req.params;
-
-        //     if (!ObjectId.isValid(id)) {
-        //         return res.status(400).json({ message: "Invalid guide id" });
-        //     }
-
-        //     const guide = await guidesCollection.findOne({ _id: new ObjectId(id) });
-        //     if (!guide) return res.status(404).json({ message: "Guide not found" });
-
-        //     res.json(guide);
-        // });
-
-        // app.get("/guides/:id", async (req, res) => {
-        //     try {
-        //         const { id } = req.params;
-
-        //         let query;
-        //         if (ObjectId.isValid(id)) {
-        //             query = { _id: new ObjectId(id) };
-        //         } else {
-        //             query = { _id: id }; // fallback if _id is string
-        //         }
-
-        //         const guide = await guidesCollection.findOne(query);
-
-        //         if (!guide) {
-        //             return res.status(404).json({ message: "Guide not found" });
-        //         }
-
-        //         res.json(guide);
-        //     } catch (err) {
-        //         console.error("Failed to fetch guide:", err);
-        //         res.status(500).json({ message: "Failed to fetch guide" });
-        //     }
-        // });
-
-
 
 
 

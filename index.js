@@ -12,6 +12,18 @@ const port = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
+// app.use(cors({
+//     origin: [
+//         // "https://charity-express-d807c.web.app", // your deployed frontend
+//         "http://localhost:5173" // dev frontend
+//     ],
+//     credentials: true // allow cookies/auth headers
+// }));
+app.use(cors({
+    origin: 'http://localhost:5173',
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true
+}));
 app.use(express.json());
 
 
@@ -85,7 +97,53 @@ async function run() {
 
         // -----------------------USERS--------------------
 
-        app.get("/users/search", verifyFBToken, verifyAdmin, async (req, res) => {
+        // ✅ Get Users with search + filter + pagination
+        app.get("/users", async (req, res) => {
+            try {
+                let { page = 1, limit = 10, search = "", role = "all" } = req.query;
+
+                page = parseInt(page);
+                limit = parseInt(limit);
+
+                const query = {};
+
+                // 🔍 Search by name or email
+                if (search) {
+                    query.$or = [
+                        { name: { $regex: search, $options: "i" } },
+                        { email: { $regex: search, $options: "i" } },
+                    ];
+                }
+
+                // 🎭 Filter by role
+                if (role && role !== "all") {
+                    query.role = role;
+                }
+
+                const skip = Math.max((page - 1) * limit, 0);
+
+                const users = await usersCollection
+                    .find(query)
+                    .skip(skip)
+                    .limit(limit)
+                    .toArray();
+
+                const total = await usersCollection.countDocuments(query);
+
+                res.json({
+                    users,
+                    total,
+                    page,
+                    totalPages: Math.ceil(total / limit),
+                });
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ message: "Failed to fetch users" });
+            }
+        });
+
+
+        app.get("/users/search", verifyFBToken, async (req, res) => {
             const emailQuery = req.query.email;
             if (!emailQuery) {
                 return res.status(400).send({ message: "Missing email query" });
@@ -207,7 +265,6 @@ async function run() {
 
 
         // __________________________ packages -_________________________
-
 
         // ✅ POST: Add new package
         app.post("/packages", verifyFBToken, async (req, res) => {
@@ -494,31 +551,68 @@ async function run() {
         });
 
         app.get("/guides/pending", async (req, res) => {
-            // console.log('headers 
-            // in /guides/approved', req.headers);
             try {
+                const page = parseInt(req.query.page) || 0; // default first page
+                const limit = parseInt(req.query.limit) || 10; // default 10 items per page
+
+                const skip = page * limit;
+
+                // Count total pending guides
+                const count = await guidesCollection.countDocuments({ status: "pending" });
+
+                // Fetch only the requested page
                 const pendingGuides = await guidesCollection
                     .find({ status: "pending" })
+                    .skip(skip)
+                    .limit(limit)
                     .toArray();
 
-                res.send(pendingGuides);
+                res.send({ guides: pendingGuides, count });
             } catch (error) {
                 console.error("Failed to load pending guides:", error);
                 res.status(500).send({ message: "Failed to load pending guides" });
             }
         });
 
+
+
+
         // DO NOT USE ANY VERIFICATION HERE
         app.get("/guides/approved", async (req, res) => {
-            console.log('headers in /guides/approved', req.headers);
             try {
-                const guides = await guidesCollection.find({ status: "active" }).toArray();
-                res.json(guides);
+                // Get page and limit from query params (default: page=0, limit=6)
+                const page = parseInt(req.query.page) || 0;
+                const limit = parseInt(req.query.limit) || 6;
+                const skip = page * limit;
+
+                // Count total approved guides
+                const count = await guidesCollection.countDocuments({ status: "active" });
+
+                // Fetch only the requested page
+                const guides = await guidesCollection
+                    .find({ status: "active" })
+                    .skip(skip)
+                    .limit(limit)
+                    .toArray();
+
+                res.json({ guides, count });
             } catch (err) {
                 console.error(err);
                 res.status(500).json({ message: "Failed to fetch approved guides" });
             }
         });
+
+        // app.get("/guides/approved", async (req, res) => {
+        //     console.log('headers in /guides/approved', req.headers);
+        //     try {
+        //         const guides = await guidesCollection.find({ status: "active" }).toArray();
+        //         res.json(guides);
+        //     } catch (err) {
+        //         console.error(err);
+        //         res.status(500).json({ message: "Failed to fetch approved guides" });
+        //     }
+        // });
+
 
 
 
@@ -727,23 +821,18 @@ async function run() {
             try {
                 const storyData = req.body;
 
-                // Destructure required fields
                 const { title, description, images, createdBy } = storyData;
 
-                // Validate required fields
                 if (!title || !description || !createdBy || !createdBy.email) {
                     return res.status(400).json({ message: 'Title, description, and createdBy (with email) are required' });
                 }
 
-                // Ensure images is an array
                 if (!images || !Array.isArray(images) || images.length === 0) {
                     return res.status(400).json({ message: 'At least one image is required' });
                 }
 
-                // Add timestamp
                 storyData.createdAt = new Date();
 
-                // Insert into MongoDB
                 const result = await storiesCollection.insertOne(storyData);
 
                 res.status(201).json({
@@ -768,9 +857,31 @@ async function run() {
 
 
         app.get("/stories", async (req, res) => {
-            const stories = await storiesCollection.find().sort({ createdAt: -1 }).toArray();
-            res.send(stories);
+            try {
+                // Get page and limit from query params, default to page=0, limit=6
+                const page = parseInt(req.query.page) || 0;
+                const limit = parseInt(req.query.limit) || 9;
+                const skip = page * limit;
+
+                // Count total stories
+                const count = await storiesCollection.countDocuments();
+
+                // Fetch only the requested page, sorted by newest first
+                const stories = await storiesCollection
+                    .find()
+                    .sort({ createdAt: -1 })
+                    .skip(skip)
+                    .limit(limit)
+                    .toArray();
+
+                // Return both stories and total count
+                res.send({ stories, count });
+            } catch (error) {
+                console.error("Failed to load stories:", error);
+                res.status(500).send({ message: "Failed to load stories" });
+            }
         });
+
 
 
 

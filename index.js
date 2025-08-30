@@ -97,17 +97,23 @@ async function run() {
 
         // -----------------------USERS--------------------
 
-        // ✅ Get Users with search + filter + pagination
+        // ✅ Get Users with search + filter + pagination // use in admin home
         app.get("/users", async (req, res) => {
             try {
-                let { page = 1, limit = 10, search = "", role = "all" } = req.query;
+                const { email, page = 1, limit = 10, search = "", role = "all" } = req.query;
 
-                page = parseInt(page);
-                limit = parseInt(limit);
+                // If email query exists, return single user
+                if (email) {
+                    const user = await usersCollection.findOne({ email });
+                    if (!user) return res.status(404).send({ message: "User not found" });
+                    return res.send(user);
+                }
+
+                // Otherwise, return paginated users
+                const pageNum = parseInt(page);
+                const limitNum = parseInt(limit);
 
                 const query = {};
-
-                // 🔍 Search by name or email
                 if (search) {
                     query.$or = [
                         { name: { $regex: search, $options: "i" } },
@@ -115,17 +121,16 @@ async function run() {
                     ];
                 }
 
-                // 🎭 Filter by role
                 if (role && role !== "all") {
                     query.role = role;
                 }
 
-                const skip = Math.max((page - 1) * limit, 0);
+                const skip = Math.max((pageNum - 1) * limitNum, 0);
 
                 const users = await usersCollection
                     .find(query)
                     .skip(skip)
-                    .limit(limit)
+                    .limit(limitNum)
                     .toArray();
 
                 const total = await usersCollection.countDocuments(query);
@@ -133,12 +138,12 @@ async function run() {
                 res.json({
                     users,
                     total,
-                    page,
-                    totalPages: Math.ceil(total / limit),
+                    page: pageNum,
+                    totalPages: Math.ceil(total / limitNum),
                 });
             } catch (err) {
                 console.error(err);
-                res.status(500).json({ message: "Failed to fetch users" });
+                res.status(500).json({ message: "Failed to fetch users", error: err.message });
             }
         });
 
@@ -240,6 +245,41 @@ async function run() {
                 });
             }
         });
+
+        // app.patch("/users/:email", async (req, res) => {
+        //     try {
+        //         const email = req.params.email;
+        //         const { name, photo, phone } = req.body;
+
+        //         if (!ObjectId.isValid(id)) {
+        //             return res.status(400).json({ message: "Invalid user ID" });
+        //         }
+
+        //         // Prevent editing email & role
+        //         const updateDoc = {
+        //             $set: {
+        //                 ...(name && { name }),
+        //                 ...(photo && { photo }),
+        //                 ...(phone && { phone }),
+        //                 updatedAt: new Date()
+        //             }
+        //         };
+
+        //         const result = await usersCollection.updateOne(
+        //             { _id: new ObjectId(id) },
+        //             updateDoc
+        //         );
+
+        //         if (result.matchedCount === 0) {
+        //             return res.status(404).json({ message: "User not found" });
+        //         }
+
+        //         res.json({ message: "Profile updated successfully" });
+        //     } catch (error) {
+        //         console.error("Error updating user:", error);
+        //         res.status(500).json({ message: "Failed to update user" });
+        //     }
+        // });
 
         app.patch("/users/:id/role", verifyFBToken, async (req, res) => {
             const { id } = req.params;
@@ -430,7 +470,18 @@ async function run() {
             }
         });
 
-
+        app.get("/bookings/admin", verifyFBToken, async (req, res) => {
+            try {
+                const bookings = await bookingsCollection.find({
+                    payment_status: "paid",
+                    booking_status: "pending",
+                }).toArray();
+                res.json(bookings);
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ error: "Failed to fetch bookings" });
+            }
+        });
 
 
 
@@ -467,6 +518,122 @@ async function run() {
             }
         });
 
+        app.patch("/bookings/:id", async (req, res) => {
+            const { id } = req.params;
+            const { payment_status, payment } = req.body;
+
+            if (!ObjectId.isValid(id)) {
+                return res.status(400).json({ error: "Invalid booking ID" });
+            }
+
+            try {
+                // const db = getDb();
+                const result = await db.collection("bookings").updateOne(
+                    { _id: new ObjectId(id) },
+                    {
+                        $set: {
+                            payment_status: payment_status || "paid",
+                            payment: {
+                                transactionId: payment.transactionId,
+                                method: payment.method,
+                                paid_at: payment.paid_at || new Date(),
+                                amount: payment.amount,
+                            },
+                        },
+                    }
+                );
+
+                if (result.matchedCount === 0) {
+                    return res.status(404).json({ error: "Booking not found" });
+                }
+
+                res.json({ success: true, message: "Booking payment updated successfully" });
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ error: "Internal server error" });
+            }
+        });
+
+        // 2️⃣ Approve booking (assign guide)
+        app.patch('/bookings/approve/:id', verifyFBToken, async (req, res) => {
+            try {
+                const bookingId = req.params.id;
+                const adminEmail = req.decoded.email;
+
+                const result = await bookingsCollection.updateOne(
+                    { _id: new ObjectId(bookingId) }, // ✅ filter object
+                    {
+                        $set: {
+                            booking_status: "guide_assigned",
+                            assignedAt: new Date().toISOString(),
+                            assignedBy: adminEmail,
+                        }
+                    }
+                );
+
+                if (result.modifiedCount === 0) {
+                    return res.status(404).send({ message: "Booking not found or already updated" });
+                }
+
+                res.json({ success: true, message: "Booking approved and guide assigned" });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: "Server Error" });
+            }
+        });
+
+        app.get('/bookings/assigned/:email', verifyFBToken, async (req, res) => {
+            try {
+                const guideEmail = req.decoded.email;
+
+                const assignedTours = await bookingsCollection
+                    .find({ guideEmail, booking_status: { $in: ['pending', 'in-review', 'accepted', 'guide_assigned'] } })
+                    .toArray();
+
+                res.json(assignedTours);
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: "Server Error" });
+            }
+        });
+
+        app.patch('/bookings/assigned/:id/status', verifyFBToken, async (req, res) => {
+            try {
+                const guideEmail = req.decoded.email;
+                const bookingId = req.params.id;
+                const { action } = req.body; // expected values: "accept" or "reject"
+
+                if (!['accept', 'reject'].includes(action)) {
+                    return res.status(400).send({ message: "Invalid action" });
+                }
+
+                const statusMap = {
+                    accept: 'accepted',
+                    reject: 'rejected'
+                };
+
+                const result = await bookingsCollection.updateOne(
+                    { _id: new ObjectId(bookingId), guideEmail, booking_status: 'in-review' },
+                    {
+                        $set: {
+                            booking_status: statusMap[action],
+                            updated_at: new Date(),
+                        }
+                    }
+                );
+
+                if (result.modifiedCount === 0) {
+                    return res.status(404).send({ message: "Tour not found or not in-review" });
+                }
+
+                res.send({ success: true, message: `Tour ${statusMap[action]}` });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: "Server Error" });
+            }
+        });
+
+
         // assign guide
         app.patch("/bookings/:id/assign", async (req, res) => {
             try {
@@ -499,7 +666,7 @@ async function run() {
 
 
         // DELETE: Remove a booking by ID
-        app.delete('/bookings/:id', async (req, res) => {
+        app.delete('/bookings/:id', verifyFBToken, async (req, res) => {
             try {
                 const id = req.params.id;
 
@@ -961,6 +1128,73 @@ async function run() {
         //         res.status(500).json({ message: 'Failed to add story' });
         //     }
         // });
+
+        app.get("/stats", async (req, res) => {
+            try {
+                // 1. Total Payment (sum of all payment amounts)
+                const payments = await paymentsCollection.aggregate([
+                    { $group: { _id: null, total: { $sum: "$amount" } } }
+                ]).toArray();
+                const totalPayment = payments[0]?.total || 0;
+
+                // 2. Total Tour Guides (from guides collection)
+                const totalGuides = await usersCollection.countDocuments({ role: "guide" });
+
+                // 3. Total Packages
+                const totalPackages = await packagesCollection.countDocuments();
+
+                // 4. Total Clients (users with role "user")
+                const totalClients = await usersCollection.countDocuments({ role: "user" });
+
+                // 5. Total Stories
+                const totalStories = await storiesCollection.countDocuments();
+
+                // ✅ Send response
+                res.json({
+                    totalPayment,
+                    totalGuides,
+                    totalPackages,
+                    totalClients,
+                    totalStories
+                });
+            } catch (error) {
+                console.error("Error fetching stats:", error);
+                res.status(500).json({ message: "Failed to fetch stats" });
+            }
+        });
+
+        // GET /stats/packages
+        app.get("/stats/packages", async (req, res) => {
+            try {
+                const packages = await packagesCollection.find().toArray();
+
+                const packageStats = await Promise.all(
+                    packages.map(async (pkg) => {
+                        // Ensure we compare string IDs
+                        const bookings = await bookingsCollection
+                            .find({ packageId: pkg._id.toString() })
+                            .toArray();
+
+                        const totalRevenue = bookings.reduce((sum, b) => sum + (b.price?.$numberInt ? parseInt(b.price.$numberInt) : b.price || 0), 0);
+
+                        return {
+                            name: pkg.title, // use title, not name
+                            bookingsCount: bookings.length,
+                            totalRevenue,
+                        };
+                    })
+                );
+
+                // Optionally sort by revenue descending
+                packageStats.sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+                res.json(packageStats);
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ message: "Failed to fetch package stats", error: err.message });
+            }
+        });
+
 
 
 

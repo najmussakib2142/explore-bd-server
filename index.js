@@ -12,13 +12,6 @@ const port = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
-// app.use(cors({
-//     origin: [
-//         // "https://charity-express-d807c.web.app", // your deployed frontend
-//         "http://localhost:5173" // dev frontend
-//     ],
-//     credentials: true // allow cookies/auth headers
-// }));
 app.use(cors({
     origin: 'http://localhost:5173',
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
@@ -59,7 +52,8 @@ async function run() {
         const paymentsCollection = db.collection('payments');
         const storiesCollection = db.collection('stories');
 
-
+        // ✅ Ensure index on status for faster filtering
+        await guidesCollection.createIndex({ status: 1 });
 
         const verifyFBToken = async (req, res, next) => {
             // console.log('header in middleware', req.headers);
@@ -222,62 +216,31 @@ async function run() {
             res.send(result)
         })
 
-        app.patch("/users/:email", async (req, res) => {
-            const email = req.params.email;
-            const updateData = req.body;
-
-            try {
-                const result = await usersCollection.updateOne(
-                    { email }, // find user by email
-                    { $set: updateData } // update fields
-                );
-
-                res.send({
-                    success: true,
-                    message: "User updated successfully",
-                    result,
-                });
-            } catch (err) {
-                res.status(500).send({
-                    success: false,
-                    message: "Failed to update user",
-                    error: err.message,
-                });
-            }
-        });
-
         // app.patch("/users/:email", async (req, res) => {
+        //     const email = req.params.email;
+        //     const updateData = req.body;
+
+        //     delete updateData.email;
+        //     delete updateData.role;
+
         //     try {
-        //         const email = req.params.email;
-        //         const { name, photo, phone } = req.body;
-
-        //         if (!ObjectId.isValid(id)) {
-        //             return res.status(400).json({ message: "Invalid user ID" });
-        //         }
-
-        //         // Prevent editing email & role
-        //         const updateDoc = {
-        //             $set: {
-        //                 ...(name && { name }),
-        //                 ...(photo && { photo }),
-        //                 ...(phone && { phone }),
-        //                 updatedAt: new Date()
-        //             }
-        //         };
-
         //         const result = await usersCollection.updateOne(
-        //             { _id: new ObjectId(id) },
-        //             updateDoc
+        //             { email }, // find user by email
+        //             { $set: updateData } // update fields
+
         //         );
 
-        //         if (result.matchedCount === 0) {
-        //             return res.status(404).json({ message: "User not found" });
-        //         }
-
-        //         res.json({ message: "Profile updated successfully" });
-        //     } catch (error) {
-        //         console.error("Error updating user:", error);
-        //         res.status(500).json({ message: "Failed to update user" });
+        //         res.send({
+        //             success: true,
+        //             message: "User updated successfully",
+        //             result,
+        //         });
+        //     } catch (err) {
+        //         res.status(500).send({
+        //             success: false,
+        //             message: "Failed to update user",
+        //             error: err.message,
+        //         });
         //     }
         // });
 
@@ -518,6 +481,8 @@ async function run() {
             }
         });
 
+
+
         app.patch("/bookings/:id", async (req, res) => {
             const { id } = req.params;
             const { payment_status, payment } = req.body;
@@ -601,7 +566,7 @@ async function run() {
             try {
                 const guideEmail = req.decoded.email;
                 const bookingId = req.params.id;
-                const { action } = req.body; // expected values: "accept" or "reject"
+                const { action } = req.body; // "accept" or "reject"
 
                 if (!['accept', 'reject'].includes(action)) {
                     return res.status(400).send({ message: "Invalid action" });
@@ -613,7 +578,7 @@ async function run() {
                 };
 
                 const result = await bookingsCollection.updateOne(
-                    { _id: new ObjectId(bookingId), guideEmail, booking_status: 'in-review' },
+                    { _id: new ObjectId(bookingId), guideEmail, booking_status: 'in-review' }, // updated filter
                     {
                         $set: {
                             booking_status: statusMap[action],
@@ -623,7 +588,7 @@ async function run() {
                 );
 
                 if (result.modifiedCount === 0) {
-                    return res.status(404).send({ message: "Tour not found or not in-review" });
+                    return res.status(404).send({ message: "Tour not found or not in-review" }); // updated message
                 }
 
                 res.send({ success: true, message: `Tour ${statusMap[action]}` });
@@ -632,6 +597,7 @@ async function run() {
                 res.status(500).send({ message: "Server Error" });
             }
         });
+
 
 
         // assign guide
@@ -692,7 +658,7 @@ async function run() {
 
         // --------------guides--------------
 
-
+        // 1
         app.post("/guides", async (req, res) => {
             try {
                 const guideData = req.body;
@@ -706,35 +672,74 @@ async function run() {
 
 
 
-
+        // 2
         app.get("/guides", async (req, res) => {
             try {
-                const guides = await guidesCollection.find({}).toArray();
-                res.status(200).json(guides);
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ message: "Failed to fetch guides" });
-            }
-        });
-
-        app.get("/guides/pending", async (req, res) => {
-            try {
-                const page = parseInt(req.query.page) || 0; // default first page
-                const limit = parseInt(req.query.limit) || 10; // default 10 items per page
+                const page = parseInt(req.query.page) || 0;
+                const limit = parseInt(req.query.limit) || 10;
 
                 const skip = page * limit;
 
-                // Count total pending guides
+                // Build query dynamically
+                const query = {};
+                if (req.query.status) query.status = req.query.status; // e.g., pending/approved
+                if (req.query.role) query.role = req.query.role;       // e.g., guide/admin
+
+                // Count total documents
+                const count = await guidesCollection.countDocuments(query);
+
+                // Fetch only required fields (projection for speed)
+                const guides = await guidesCollection
+                    .find(query, { projection: { name: 1, email: 1, status: 1 } }) // only send what frontend needs
+                    .skip(skip)
+                    .limit(limit)
+                    .toArray();
+
+                res.send({ guides, count });
+            } catch (error) {
+                console.error("❌ Failed to load guides:", error);
+                res.status(500).send({ message: "Failed to load guides" });
+            }
+        });
+
+        // 3
+        app.get("/guides/random", async (req, res) => {
+            try {
+                const guides = await guidesCollection.aggregate([
+                    { $match: { status: "active" } },
+                    { $sample: { size: 6 } }
+                ]).toArray();
+                res.json(guides);
+            } catch (error) {
+                res.status(500).send({ message: error.message });
+            }
+        });
+
+        // 4
+        app.get("/guides/pending", async (req, res) => {
+            try {
+                const page = parseInt(req.query.page) || 0;
+                const limit = parseInt(req.query.limit) || 10;
+                const skip = page * limit;
+
                 const count = await guidesCollection.countDocuments({ status: "pending" });
 
-                // Fetch only the requested page
                 const pendingGuides = await guidesCollection
                     .find({ status: "pending" })
                     .skip(skip)
                     .limit(limit)
                     .toArray();
 
-                res.send({ guides: pendingGuides, count });
+                // 🔥 Normalize data before sending
+                const guides = pendingGuides.map(g => ({
+                    ...g,
+                    age: g.age || null,
+                    created_at: g.created_at
+                        ? new Date(g.created_at).toISOString() // always string
+                        : null,
+                }));
+
+                res.send({ guides, count });
             } catch (error) {
                 console.error("Failed to load pending guides:", error);
                 res.status(500).send({ message: "Failed to load pending guides" });
@@ -742,8 +747,7 @@ async function run() {
         });
 
 
-
-
+        // 5
         // DO NOT USE ANY VERIFICATION HERE
         app.get("/guides/approved", async (req, res) => {
             try {
@@ -769,54 +773,8 @@ async function run() {
             }
         });
 
-        // app.get("/guides/approved", async (req, res) => {
-        //     console.log('headers in /guides/approved', req.headers);
-        //     try {
-        //         const guides = await guidesCollection.find({ status: "active" }).toArray();
-        //         res.json(guides);
-        //     } catch (err) {
-        //         console.error(err);
-        //         res.status(500).json({ message: "Failed to fetch approved guides" });
-        //     }
-        // });
-
-
-
-
-        // assign guide
-        app.get("/guides/available", async (req, res) => {
-            const { district } = req.query;
-
-            try {
-                const guides = await guidesCollection
-                    .find({
-                        district,
-                        status: { $in: ["approved", "active"] },
-                        // work_status: "available",
-                    })
-                    .toArray();
-
-                res.send(guides);
-            } catch (err) {
-                res.status(500).send({ message: "Failed to load guides" });
-            }
-        });
-
-
-
-        app.get("/guides/random", async (req, res) => {
-            try {
-                const guides = await guidesCollection.aggregate([
-                    { $match: { status: "active" } },
-                    { $sample: { size: 6 } }
-                ]).toArray();
-                res.json(guides);
-            } catch (error) {
-                res.status(500).send({ message: error.message });
-            }
-        });
-
-        app.get("/guides/:id", async (req, res) => {
+        // 6
+        app.get("/guides/id/:id", async (req, res) => {
             try {
                 const { id } = req.params;
                 const guide = await guidesCollection.findOne({ _id: new ObjectId(id) });
@@ -829,8 +787,78 @@ async function run() {
 
 
 
+        // assign guide
+        // app.get("/guides/available", async (req, res) => {
+        //     const { district } = req.query;
+
+        //     try {
+        //         const guides = await guidesCollection
+        //             .find({
+        //                 district,
+        //                 status: { $in: ["approved", "active"] },
+        //                 // work_status: "available",
+        //             })
+        //             .toArray();
+
+        //         res.send(guides);
+        //     } catch (err) {
+        //         res.status(500).send({ message: "Failed to load guides" });
+        //     }
+        // });
 
 
+
+
+        // 7
+        app.get("/guides/:email", async (req, res) => {
+            try {
+                const email = req.params.email;
+
+                const guide = await guidesCollection.findOne({ email: email });
+
+                if (!guide) {
+                    return res.status(404).json({ message: "Guide not found" });
+                }
+
+                res.json(guide);
+            } catch (error) {
+                console.error("Error fetching guide by email:", error);
+                res.status(500).json({ message: "Server error" });
+            }
+        });
+
+
+        // 8
+        app.patch("/guides/:email", async (req, res) => {
+            try {
+                const email = req.params.email;
+                const updateData = req.body;
+
+                // remove undefined / empty fields so they don't overwrite with null
+                Object.keys(updateData).forEach((key) => {
+                    if (updateData[key] === undefined || updateData[key] === "") {
+                        delete updateData[key];
+                    }
+                });
+
+                const result = await guidesCollection.updateOne(
+                    { email: email },
+                    { $set: updateData }
+                );
+
+                if (result.matchedCount === 0) {
+                    return res.status(404).json({ message: "Guide not found" });
+                }
+
+                res.json({ message: "Guide updated successfully" });
+            } catch (error) {
+                console.error("Error updating guide:", error);
+                res.status(500).json({ message: "Server error" });
+            }
+        });
+
+
+        // 9
         app.patch("/guides/:id/status", verifyFBToken, async (req, res) => {
             const { id } = req.params;
             const { status, email } = req.body;
@@ -865,7 +893,7 @@ async function run() {
 
 
 
-
+        // 10
         // PATCH /guides/approve/:id - approve a guide
         app.patch("/guides/approve/:id", async (req, res) => {
             try {
@@ -1049,6 +1077,22 @@ async function run() {
             }
         });
 
+        app.get("/stories/:id", async (req, res) => {
+            const { id } = req.params;
+
+            try {
+                const story = await storiesCollection.findOne({ _id: new ObjectId(id) });
+
+                if (!story) {
+                    return res.status(404).json({ message: "Story not found" });
+                }
+
+                res.json(story);
+            } catch (err) {
+                console.error("Error fetching story:", err);
+                res.status(500).json({ message: "Server error" });
+            }
+        });
 
 
 
@@ -1100,6 +1144,59 @@ async function run() {
                 res.status(500).json({ message: "Something went wrong" });
             }
         });
+
+        // PATCH /stories/:id
+        app.patch("/stories/:id", verifyFBToken, async (req, res) => {
+            try {
+                const { id } = req.params;
+                const { title, description, addImages, removeImages } = req.body;
+
+                const updateDoc = {};
+
+                if (title) updateDoc.title = title;
+                if (description) updateDoc.description = description;
+
+                // MongoDB operators
+                const operators = {};
+                if (addImages && addImages.length) operators.$push = { images: { $each: addImages } };
+                if (removeImages && removeImages.length) operators.$pull = { images: { $in: removeImages } };
+
+                if (Object.keys(updateDoc).length) operators.$set = updateDoc;
+
+                const result = await storiesCollection.updateOne(
+                    { _id: new ObjectId(id), "createdBy.email": req.decoded.email },
+                    operators
+                );
+
+                if (result.matchedCount === 0) return res.status(404).json({ message: "Story not found or not authorized" });
+
+                res.json({ message: "Story updated" });
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ message: "Failed to update story" });
+            }
+        });
+
+
+        // DELETE /stories/:id
+        app.delete("/stories/:id", verifyFBToken, async (req, res) => {
+            try {
+                const { id } = req.params;
+
+                const result = await storiesCollection.deleteOne({
+                    _id: new ObjectId(id),
+                    "createdBy.email": req.decoded.email, // only guide can delete own story
+                });
+
+                if (result.deletedCount === 0) return res.status(404).json({ message: "Story not found or not authorized" });
+
+                res.json({ message: "Story deleted" });
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ message: "Failed to delete story" });
+            }
+        });
+
 
 
 

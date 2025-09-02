@@ -164,7 +164,7 @@ async function run() {
         });
 
         // GET: Get user role by email
-        app.get('/users/:email/role', async (req, res) => {
+        app.get('/users/:email/role', verifyFBToken, async (req, res) => {
             try {
                 const email = req.params.email;
 
@@ -337,6 +337,55 @@ async function run() {
             }
         });
 
+        // Place this BEFORE /packages/:id
+        app.get("/top-booked-packages", async (req, res) => {
+            try {
+                const result = await bookingsCollection.aggregate([
+                    // Convert only if packageId is stored as string
+                    {
+                        $addFields: {
+                            packageId: { $toObjectId: "$packageId" }
+                        }
+                    },
+                    {
+                        $group: {
+                            _id: "$packageId",
+                            totalBookings: { $sum: 1 }
+                        }
+                    },
+                    { $sort: { totalBookings: -1 } },
+                    { $limit: 6 },
+                    {
+                        $lookup: {
+                            from: "packages",
+                            localField: "_id",
+                            foreignField: "_id",
+                            as: "package"
+                        }
+                    },
+                    { $unwind: "$package" },
+                    {
+                        $project: {
+                            _id: "$package._id",
+                            title: "$package.title",
+                            image: { $arrayElemAt: ["$package.images", 0] }, // first image
+                            description: "$package.about",
+                            totalDays: "$package.totalDays",
+                            price: "$package.price",
+                            totalBookings: 1
+                        }
+                    }
+                ]).toArray();
+
+                res.json(result);
+            } catch (error) {
+                console.error("❌ Error fetching top booked packages:", error); // log full error
+                res.status(500).json({ error: error.message, stack: error.stack });
+            }
+        });
+
+
+
         app.get("/packages/:id", async (req, res) => {
             // console.log('headers in /packages/:id', req.headers);
             // console.log('headers in add packages', req.headers);
@@ -356,23 +405,31 @@ async function run() {
             }
         });
 
-        app.get('/packages/:id', async (req, res) => {
-            try {
-                const id = req.params.id;
 
-                const query = { _id: new ObjectId(id) };
-                const parcel = await packagesCollection.findOne(query);
 
-                if (!parcel) {
-                    return res.status(404).send({ message: 'Parcel not found' });
-                }
+        // app.get('/packages/:id', async (req, res) => {
+        //     try {
+        //         const id = req.params.id;
 
-                res.send(parcel);
-            } catch (error) {
-                console.error('Error fetching parcel by ID:', error);
-                res.status(500).send({ message: 'Failed to get parcel' });
-            }
-        })
+        //         const query = { _id: new ObjectId(id) };
+        //         const parcel = await packagesCollection.findOne(query);
+
+        //         if (!parcel) {
+        //             return res.status(404).send({ message: 'Parcel not found' });
+        //         }
+
+        //         res.send(parcel);
+        //     } catch (error) {
+        //         console.error('Error fetching parcel by ID:', error);
+        //         res.status(500).send({ message: 'Failed to get parcel' });
+        //     }
+        // })
+
+
+
+
+
+
 
 
         // ---------------bookings---------
@@ -1110,6 +1167,41 @@ async function run() {
         });
 
 
+        app.patch("/stories/:id", verifyFBToken, async (req, res) => {
+            console.log("✅ Received PATCH request");
+            console.log("Headers:", req.headers);
+            console.log("Body:", req.body);
+            try {
+                const { id } = req.params;
+                const { title, description, addImages, removeImages } = req.body;
+
+                const updateDoc = {};
+
+                if (title) updateDoc.title = title;
+                if (description) updateDoc.description = description;
+
+                // MongoDB operators
+                const operators = {};
+                if (addImages && addImages.length) operators.$push = { images: { $each: addImages } };
+                if (removeImages && removeImages.length) operators.$pull = { images: { $in: removeImages } };
+
+                if (Object.keys(updateDoc).length) operators.$set = updateDoc;
+
+                const result = await storiesCollection.updateOne(
+                    { _id: new ObjectId(id), "createdBy.email": req.decoded.email },
+                    operators
+                );
+
+                if (result.matchedCount === 0) return res.status(404).json({ message: "Story not found or not authorized" });
+
+                res.json({ message: "Story updated" });
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ message: "Failed to update story" });
+            }
+        });
+
+
 
         app.patch("/stories/:id/like", async (req, res) => {
             try {
@@ -1146,36 +1238,7 @@ async function run() {
         });
 
         // PATCH /stories/:id
-        app.patch("/stories/:id", verifyFBToken, async (req, res) => {
-            try {
-                const { id } = req.params;
-                const { title, description, addImages, removeImages } = req.body;
 
-                const updateDoc = {};
-
-                if (title) updateDoc.title = title;
-                if (description) updateDoc.description = description;
-
-                // MongoDB operators
-                const operators = {};
-                if (addImages && addImages.length) operators.$push = { images: { $each: addImages } };
-                if (removeImages && removeImages.length) operators.$pull = { images: { $in: removeImages } };
-
-                if (Object.keys(updateDoc).length) operators.$set = updateDoc;
-
-                const result = await storiesCollection.updateOne(
-                    { _id: new ObjectId(id), "createdBy.email": req.decoded.email },
-                    operators
-                );
-
-                if (result.matchedCount === 0) return res.status(404).json({ message: "Story not found or not authorized" });
-
-                res.json({ message: "Story updated" });
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ message: "Failed to update story" });
-            }
-        });
 
 
         // DELETE /stories/:id
@@ -1291,6 +1354,8 @@ async function run() {
                 res.status(500).json({ message: "Failed to fetch package stats", error: err.message });
             }
         });
+
+
 
 
 

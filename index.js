@@ -354,7 +354,7 @@ async function run() {
                         }
                     },
                     { $sort: { totalBookings: -1 } },
-                    { $limit: 6 },
+                    { $limit: 3 },
                     {
                         $lookup: {
                             from: "packages",
@@ -478,30 +478,49 @@ async function run() {
         app.get("/bookings", verifyFBToken, async (req, res) => {
             try {
                 const email = req.query.email;
+                const page = parseInt(req.query.page) || 0;
+                const limit = parseInt(req.query.limit) || 10;
+
                 if (!email) {
                     return res.status(400).json({ error: "Email is required" });
                 }
 
-                const bookings = await bookingsCollection.find({ created_by: email }).toArray();
-                res.json(bookings);
+                const query = { created_by: email };
+
+                // total count for pagination
+                const totalBookings = await bookingsCollection.countDocuments(query);
+                const totalPages = Math.ceil(totalBookings / limit);
+
+                // ✅ Apply pagination
+                const bookings = await bookingsCollection
+                    .find(query)
+                    .skip(page * limit)
+                    .limit(limit)
+                    .toArray();
+
+                res.json({ bookings, totalPages });
             } catch (error) {
                 console.error("Error fetching bookings:", error);
                 res.status(500).json({ error: "Internal Server Error" });
             }
         });
 
-        app.get("/bookings/admin", verifyFBToken, async (req, res) => {
-            try {
-                const bookings = await bookingsCollection.find({
-                    payment_status: "paid",
-                    booking_status: "pending",
-                }).toArray();
-                res.json(bookings);
-            } catch (err) {
-                console.error(err);
-                res.status(500).json({ error: "Failed to fetch bookings" });
-            }
-        });
+
+
+
+
+        // app.get("/bookings/admin", verifyFBToken, async (req, res) => {
+        //     try {
+        //         const bookings = await bookingsCollection.find({
+        //             payment_status: "paid",
+        //             booking_status: "pending",
+        //         }).toArray();
+        //         res.json(bookings);
+        //     } catch (err) {
+        //         console.error(err);
+        //         res.status(500).json({ error: "Failed to fetch bookings" });
+        //     }
+        // });
 
 
 
@@ -542,7 +561,7 @@ async function run() {
 
         app.patch("/bookings/:id", async (req, res) => {
             const { id } = req.params;
-            const { payment_status, payment } = req.body;
+            const { payment_status, payment, booking_status } = req.body;
 
             if (!ObjectId.isValid(id)) {
                 return res.status(400).json({ error: "Invalid booking ID" });
@@ -555,6 +574,7 @@ async function run() {
                     {
                         $set: {
                             payment_status: payment_status || "paid",
+                            booking_status: booking_status || "in-review",
                             payment: {
                                 transactionId: payment.transactionId,
                                 method: payment.method,
@@ -577,32 +597,33 @@ async function run() {
         });
 
         // 2️⃣ Approve booking (assign guide)
-        app.patch('/bookings/approve/:id', verifyFBToken, async (req, res) => {
-            try {
-                const bookingId = req.params.id;
-                const adminEmail = req.decoded.email;
 
-                const result = await bookingsCollection.updateOne(
-                    { _id: new ObjectId(bookingId) }, // ✅ filter object
-                    {
-                        $set: {
-                            booking_status: "guide_assigned",
-                            assignedAt: new Date().toISOString(),
-                            assignedBy: adminEmail,
-                        }
-                    }
-                );
+        // app.patch('/bookings/approve/:id', verifyFBToken, async (req, res) => {
+        //     try {
+        //         const bookingId = req.params.id;
+        //         const adminEmail = req.decoded.email;
 
-                if (result.modifiedCount === 0) {
-                    return res.status(404).send({ message: "Booking not found or already updated" });
-                }
+        //         const result = await bookingsCollection.updateOne(
+        //             { _id: new ObjectId(bookingId) }, // ✅ filter object
+        //             {
+        //                 $set: {
+        //                     booking_status: "guide_assigned",
+        //                     assignedAt: new Date().toISOString(),
+        //                     assignedBy: adminEmail,
+        //                 }
+        //             }
+        //         );
 
-                res.json({ success: true, message: "Booking approved and guide assigned" });
-            } catch (err) {
-                console.error(err);
-                res.status(500).send({ message: "Server Error" });
-            }
-        });
+        //         if (result.modifiedCount === 0) {
+        //             return res.status(404).send({ message: "Booking not found or already updated" });
+        //         }
+
+        //         res.json({ success: true, message: "Booking approved and guide assigned" });
+        //     } catch (err) {
+        //         console.error(err);
+        //         res.status(500).send({ message: "Server Error" });
+        //     }
+        // });
 
         app.get('/bookings/assigned/:email', verifyFBToken, async (req, res) => {
             try {
@@ -658,34 +679,35 @@ async function run() {
 
 
         // assign guide
-        app.patch("/bookings/:id/assign", async (req, res) => {
-            try {
-                const { id } = req.params;
-                const { guideId, guideEmail, guideName } = req.body;
 
-                const result = await bookingsCollection.updateOne(
-                    { _id: new ObjectId(id) },
-                    {
-                        $set: {
-                            guideId,
-                            guideEmail,
-                            guideName,
-                            status: "assigned",
-                            updated_at: new Date(),
-                        },
-                    }
-                );
+        // app.patch("/bookings/:id/assign", async (req, res) => {
+        //     try {
+        //         const { id } = req.params;
+        //         const { guideId, guideEmail, guideName } = req.body;
 
-                if (result.modifiedCount === 0) {
-                    return res.status(404).send({ message: "Booking not found" });
-                }
+        //         const result = await bookingsCollection.updateOne(
+        //             { _id: new ObjectId(id) },
+        //             {
+        //                 $set: {
+        //                     guideId,
+        //                     guideEmail,
+        //                     guideName,
+        //                     status: "assigned",
+        //                     updated_at: new Date(),
+        //                 },
+        //             }
+        //         );
 
-                res.send({ success: true, message: "Guide assigned successfully" });
-            } catch (error) {
-                console.error("Error assigning guide:", error);
-                res.status(500).send({ message: "Failed to assign guide" });
-            }
-        });
+        //         if (result.modifiedCount === 0) {
+        //             return res.status(404).send({ message: "Booking not found" });
+        //         }
+
+        //         res.send({ success: true, message: "Guide assigned successfully" });
+        //     } catch (error) {
+        //         console.error("Error assigning guide:", error);
+        //         res.status(500).send({ message: "Failed to assign guide" });
+        //     }
+        // });
 
 
         // DELETE: Remove a booking by ID
@@ -980,72 +1002,45 @@ async function run() {
 
 
 
-        app.post('/payments', async (req, res) => {
+        // GET payments by user email
+        app.get("/payments", verifyFBToken, async (req, res) => {
             try {
-                const { packageId, bookingId, email, amount, paymentMethod, transactionId } = req.body;
+                const { email } = req.query;
 
-                // 1. Update parcel's payment_status
-                const updateResult = await bookingsCollection.updateOne(
-                    { _id: new ObjectId(bookingId) },
-                    // { packageId: packageId, email: user.email }, 
-                    {
-                        $set: {
-                            payment_status: 'paid'
-                        }
-                    }
-                );
-
-                if (updateResult.modifiedCount === 0) {
-                    return res.status(404).send({ message: 'Parcel not found or already paid' });
+                if (!email) {
+                    return res.status(400).json({ message: "Email is required" });
                 }
 
-                // 2. Insert payment record
-                const paymentDoc = {
-                    packageId,
-                    email,
-                    amount,
-                    paymentMethod,
-                    transactionId,
-                    paid_at_string: new Date().toISOString(),
-                    paid_at: new Date(),
-                };
+                // Find bookings where created_by matches email AND has payment info
+                const payments = await bookingsCollection
+                    .find({ created_by: email, payment_status: "paid" })
+                    .project({
+                        _id: 0,
+                        // packageId: 1,
+                        packageName: 1,
+                        "payment.amount": 1,
+                        "payment.transactionId": 1,
+                        created_by: 1,
+                        "payment.paid_at": 1,
+                    })
+                    .toArray();
 
-                const paymentResult = await paymentsCollection.insertOne(paymentDoc);
+                // Transform for frontend use
+                const formatted = payments.map((p) => ({
+                    // packageId: p.packageId,
+                    packageName: p.packageName,
+                    amount: p.payment?.amount,
+                    transactionId: p.payment?.transactionId,
+                    email: p.created_by,
+                    paid_at_string: p.payment?.paid_at,
+                }));
 
-                res.status(201).send({
-                    message: 'Payment recorded and parcel marked as paid',
-                    insertedId: paymentResult.insertedId,
-                });
-
+                res.json(formatted);
             } catch (error) {
-                console.error('Payment processing failed:', error);
-                res.status(500).send({ message: 'Failed to record payment' });
+                console.error("Error fetching payments:", error);
+                res.status(500).json({ message: "Internal server error" });
             }
         });
-
-        app.get('/payments', verifyFBToken, async (req, res) => {
-
-            console.log('headers in payment', req.headers);
-
-            try {
-                const userEmail = req.query.email;
-
-                // decoded email
-                console.log('decoded', req.decoded);
-                if (req.decoded.email !== userEmail) {
-                    return res.status(403).send({ message: 'forbidden access' })
-                }
-
-                const query = userEmail ? { email: userEmail } : {};
-                const options = { sort: { paid_at: -1 } }
-                const payments = await paymentsCollection.find(query, options).toArray()
-                res.send(payments)
-            } catch (error) {
-                console.error('Error fetching payment history:', error);
-                res.status(500).send({ message: 'Failed to get payments' });
-            }
-        })
-
 
 
 

@@ -475,35 +475,31 @@ async function run() {
             }
         });
         // backend/index.js or bookings.routes.js
-        app.get("/bookings", verifyFBToken, async (req, res) => {
+        app.get("/myBookings", verifyFBToken, async (req, res) => {
             try {
-                const email = req.query.email;
-                const page = parseInt(req.query.page) || 0;
-                const limit = parseInt(req.query.limit) || 10;
-
+                const { email, page = 0, limit = 10 } = req.query;
                 if (!email) {
                     return res.status(400).json({ error: "Email is required" });
                 }
 
                 const query = { created_by: email };
-
-                // total count for pagination
                 const totalBookings = await bookingsCollection.countDocuments(query);
-                const totalPages = Math.ceil(totalBookings / limit);
-
-                // ✅ Apply pagination
                 const bookings = await bookingsCollection
                     .find(query)
-                    .skip(page * limit)
-                    .limit(limit)
+                    .skip(Number(page) * Number(limit))
+                    .limit(Number(limit))
                     .toArray();
 
-                res.json({ bookings, totalPages });
+                res.json({
+                    bookings,
+                    totalPages: Math.ceil(totalBookings / limit),
+                });
             } catch (error) {
                 console.error("Error fetching bookings:", error);
                 res.status(500).json({ error: "Internal Server Error" });
             }
         });
+
 
 
 

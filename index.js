@@ -78,15 +78,29 @@ async function run() {
                 return res.status(401).send({ message: 'unauthorized access' })
             }
         }
-        const verifyAdmin = async (req, res, next) => {
-            const email = req.decoded.email;
-            const query = { email }
-            const user = await usersCollection.findOne(query);
-            if (!user || user.role !== 'admin') {
-                return res.status(403).send({ message: 'forbidden access' })
-            }
-            next();
-        }
+        // const verifyAdmin = async (req, res, next) => {
+        //     const email = req.decoded.email;
+        //     const query = { email }
+        //     const user = await usersCollection.findOne(query);
+        //     if (!user || user.role !== 'admin') {
+        //         return res.status(403).send({ message: 'forbidden access' })
+        //     }
+        //     next();
+        // }
+
+        const verifyRole = (allowedRoles) => {
+            return async (req, res, next) => {
+                const email = req.decoded.email;
+                const query = { email };
+                const user = await usersCollection.findOne(query);
+
+                if (!user || !allowedRoles.includes(user.role)) {
+                    return res.status(403).send({ message: "forbidden access" });
+                }
+
+                next();
+            };
+        };
 
 
         // -----------------------USERS--------------------
@@ -475,7 +489,7 @@ async function run() {
             }
         });
         // backend/index.js or bookings.routes.js
-        app.get("/myBookings", verifyFBToken, async (req, res) => {
+        app.get("/myBookings", verifyFBToken, verifyRole(["user"]), async (req, res) => {
             try {
                 const { email, page = 0, limit = 10 } = req.query;
                 if (!email) {
@@ -486,6 +500,7 @@ async function run() {
                 const totalBookings = await bookingsCollection.countDocuments(query);
                 const bookings = await bookingsCollection
                     .find(query)
+                    .sort({ created_at: -1 })
                     .skip(Number(page) * Number(limit))
                     .limit(Number(limit))
                     .toArray();
@@ -621,22 +636,38 @@ async function run() {
         //     }
         // });
 
-        app.get('/bookings/assigned/:email', verifyFBToken, async (req, res) => {
+        app.get('/bookings/assigned/:email', verifyFBToken, verifyRole(["guide"]), async (req, res) => {
             try {
                 const guideEmail = req.decoded.email;
+                const { page = 0, limit = 10 } = req.query; // pagination params
+
+                const query = {
+                    guideEmail,
+                    booking_status: { $in: ['pending', 'in-review', 'accepted', 'guide_assigned'] }
+                };
+
+                const totalBookings = await bookingsCollection.countDocuments(query);
 
                 const assignedTours = await bookingsCollection
-                    .find({ guideEmail, booking_status: { $in: ['pending', 'in-review', 'accepted', 'guide_assigned'] } })
+                    .find(query)
+                    .sort({ created_at: -1 }) // newest first
+                    .skip(Number(page) * Number(limit))
+                    .limit(Number(limit))
                     .toArray();
 
-                res.json(assignedTours);
+                res.json({
+                    assignedTours,
+                    totalPages: Math.ceil(totalBookings / limit),
+                });
+
             } catch (err) {
                 console.error(err);
                 res.status(500).send({ message: "Server Error" });
             }
         });
 
-        app.patch('/bookings/assigned/:id/status', verifyFBToken, async (req, res) => {
+
+        app.patch('/bookings/assigned/:id/status', verifyFBToken, verifyRole(["guide"]), async (req, res) => {
             try {
                 const guideEmail = req.decoded.email;
                 const bookingId = req.params.id;
@@ -734,7 +765,7 @@ async function run() {
         // --------------guides--------------
 
         // 1
-        app.post("/guides", async (req, res) => {
+        app.post("/guides", verifyFBToken, verifyRole(["user"]), async (req, res) => {
             try {
                 const guideData = req.body;
                 const result = await guidesCollection.insertOne(guideData);
@@ -744,8 +775,6 @@ async function run() {
                 res.status(500).json({ message: "Failed to apply as guide" });
             }
         });
-
-
 
         // 2
         app.get("/guides", async (req, res) => {
@@ -999,7 +1028,7 @@ async function run() {
 
 
         // GET payments by user email
-        app.get("/payments", verifyFBToken, async (req, res) => {
+        app.get("/payments", verifyFBToken, verifyRole(["user"]), async (req, res) => {
             try {
                 const { email } = req.query;
 
@@ -1060,7 +1089,7 @@ async function run() {
 
         // ---------------- Stories-----------------
 
-        app.post('/stories', async (req, res) => {
+        app.post('/stories', verifyFBToken, verifyRole(["user", "guide"]), async (req, res) => {
             try {
                 const storyData = req.body;
 
@@ -1145,7 +1174,7 @@ async function run() {
 
 
 
-        app.get("/stories/guide/:email", async (req, res) => {
+        app.get("/stories/guide/:email", verifyFBToken, verifyRole(["user", "guide"]), async (req, res) => {
             const { email } = req.params;
             try {
                 const stories = await storiesCollection
@@ -1158,7 +1187,7 @@ async function run() {
         });
 
 
-        app.patch("/stories/:id", verifyFBToken, async (req, res) => {
+        app.patch("/stories/:id", verifyFBToken, verifyRole(["user", "guide"]), async (req, res) => {
             console.log("✅ Received PATCH request");
             console.log("Headers:", req.headers);
             console.log("Body:", req.body);
@@ -1233,7 +1262,7 @@ async function run() {
 
 
         // DELETE /stories/:id
-        app.delete("/stories/:id", verifyFBToken, async (req, res) => {
+        app.delete("/stories/:id", verifyFBToken, verifyRole(["user", "guide"]), async (req, res) => {
             try {
                 const { id } = req.params;
 

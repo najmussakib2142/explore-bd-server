@@ -105,6 +105,23 @@ async function run() {
 
         // -----------------------USERS--------------------
 
+        app.post('/users', async (req, res) => {
+            const email = req.body.email;
+            const userExists = await usersCollection.findOne({ email })
+            if (userExists) {
+                // update last_log_in for existing user
+                const updateResult = await usersCollection.updateOne(
+                    { email },
+                    { $set: { last_log_in: new Date().toISOString() } }
+                )
+                return res.status(200).send({ message: 'Last login updated', inserted: false, updateResult });
+            }
+            // New user
+            const user = req.body;
+            const result = await usersCollection.insertOne(user);
+            res.send(result)
+        })
+
         // ✅ Get Users with search + filter + pagination // use in admin home
         app.get("/users", async (req, res) => {
             try {
@@ -122,6 +139,7 @@ async function run() {
                 const limitNum = parseInt(limit);
 
                 const query = {};
+
                 if (search) {
                     query.$or = [
                         { name: { $regex: search, $options: "i" } },
@@ -131,6 +149,11 @@ async function run() {
 
                 if (role && role !== "all") {
                     query.role = role;
+
+                    // Ignore rejected guides
+                    if (role === "guide") {
+                        query.status = { $ne: "rejected" }; // status not equal to rejected
+                    }
                 }
 
                 const skip = Math.max((pageNum - 1) * limitNum, 0);
@@ -156,7 +179,7 @@ async function run() {
         });
 
 
-        app.get("/users/search", verifyFBToken, async (req, res) => {
+        app.get("/users/search", verifyFBToken, verifyRole(["admin"]), async (req, res) => {
             const emailQuery = req.query.email;
             if (!emailQuery) {
                 return res.status(400).send({ message: "Missing email query" });
@@ -213,22 +236,7 @@ async function run() {
             }
         })
 
-        app.post('/users', async (req, res) => {
-            const email = req.body.email;
-            const userExists = await usersCollection.findOne({ email })
-            if (userExists) {
-                // update last_log_in for existing user
-                const updateResult = await usersCollection.updateOne(
-                    { email },
-                    { $set: { last_log_in: new Date().toISOString() } }
-                )
-                return res.status(200).send({ message: 'Last login updated', inserted: false, updateResult });
-            }
-            // New user
-            const user = req.body;
-            const result = await usersCollection.insertOne(user);
-            res.send(result)
-        })
+
 
         // app.patch("/users/:email", async (req, res) => {
         //     const email = req.params.email;
@@ -258,7 +266,7 @@ async function run() {
         //     }
         // });
 
-        app.patch("/users/:id/role", verifyFBToken, async (req, res) => {
+        app.patch("/users/:id/role", verifyFBToken, verifyRole(["admin"]), async (req, res) => {
             const { id } = req.params;
             const { role } = req.body;
 
@@ -278,13 +286,35 @@ async function run() {
             }
         });
 
+        // PATCH reject guide status in usersCollection
+        app.patch("/users/:email/status", verifyFBToken, verifyRole(["admin"]), async (req, res) => {
+            const { email } = req.params;
+            const { status } = req.body;
+
+            if (!email || !status) return res.status(400).json({ message: "Email and status are required" });
+
+            try {
+                const result = await usersCollection.updateOne({ email }, { $set: { status } });
+
+                if (result.modifiedCount === 0) {
+                    return res.status(404).json({ message: "User not found or status unchanged" });
+                }
+
+                res.json({ message: "User status updated successfully" });
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ message: "Failed to update user status" });
+            }
+        });
+
+
 
 
 
         // __________________________ packages -_________________________
 
         // ✅ POST: Add new package
-        app.post("/packages", verifyFBToken, async (req, res) => {
+        app.post("/packages", verifyFBToken, verifyRole(["admin"]), async (req, res) => {
             // console.log('headers in add packages', req.headers);
             try {
                 const newPackage = req.body;
@@ -368,7 +398,7 @@ async function run() {
                         }
                     },
                     { $sort: { totalBookings: -1 } },
-                    { $limit: 3 },
+                    { $limit: 4 },
                     {
                         $lookup: {
                             from: "packages",
@@ -489,7 +519,7 @@ async function run() {
             }
         });
         // backend/index.js or bookings.routes.js
-        app.get("/myBookings", verifyFBToken, verifyRole(["user"]), async (req, res) => {
+        app.get("/myBookings", verifyFBToken,  async (req, res) => {
             try {
                 const { email, page = 0, limit = 10 } = req.query;
                 if (!email) {
@@ -820,7 +850,7 @@ async function run() {
         });
 
         // 4
-        app.get("/guides/pending", async (req, res) => {
+        app.get("/guides/pending", verifyFBToken, verifyRole(["admin"]), async (req, res) => {
             try {
                 const page = parseInt(req.query.page) || 0;
                 const limit = parseInt(req.query.limit) || 10;
@@ -963,7 +993,7 @@ async function run() {
 
 
         // 9
-        app.patch("/guides/:id/status", verifyFBToken, async (req, res) => {
+        app.patch("/guides/:id/status", verifyFBToken, verifyRole(["admin"]), async (req, res) => {
             const { id } = req.params;
             const { status, email } = req.body;
             const query = { _id: new ObjectId(id) }
@@ -1343,7 +1373,9 @@ async function run() {
             }
         });
 
-        // GET /stats/packages
+        // GET /stats
+
+
         app.get("/stats/packages", async (req, res) => {
             try {
                 const packages = await packagesCollection.find().toArray();

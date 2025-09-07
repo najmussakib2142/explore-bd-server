@@ -519,7 +519,7 @@ async function run() {
             }
         });
         // backend/index.js or bookings.routes.js
-        app.get("/myBookings", verifyFBToken,  async (req, res) => {
+        app.get("/myBookings", verifyFBToken, async (req, res) => {
             try {
                 const { email, page = 0, limit = 10 } = req.query;
                 if (!email) {
@@ -907,6 +907,17 @@ async function run() {
             }
         });
 
+        // Get all active guides (for dropdowns)
+        app.get("/guides/approved/all", async (req, res) => {
+            try {
+                const guides = await guidesCollection.find({ status: "active" }).toArray();
+                res.json({ guides });
+            } catch (err) {
+                console.error(err);
+                res.status(500).json({ message: "Failed to fetch approved guides" });
+            }
+        });
+
         // 6
         app.get("/guides/id/:id", async (req, res) => {
             try {
@@ -1204,7 +1215,7 @@ async function run() {
 
 
 
-        app.get("/stories/guide/:email", verifyFBToken, verifyRole(["user", "guide"]), async (req, res) => {
+        app.get("/stories/guide/:email", async (req, res) => {
             const { email } = req.params;
             try {
                 const stories = await storiesCollection

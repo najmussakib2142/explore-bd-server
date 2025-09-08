@@ -19,6 +19,8 @@ app.use(cors({
 }));
 app.use(express.json());
 
+const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+// const serviceAccount = JSON.parse(decodedKey);
 
 const serviceAccount = require("./firebase-admin-key.json");
 
@@ -42,7 +44,7 @@ const client = new MongoClient(uri, {
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
-        await client.connect();
+        // await client.connect();
 
         const db = client.db("exploreBD");
         const packagesCollection = db.collection("packages");
@@ -90,17 +92,27 @@ async function run() {
 
         const verifyRole = (allowedRoles) => {
             return async (req, res, next) => {
-                const email = req.decoded.email;
-                const query = { email };
-                const user = await usersCollection.findOne(query);
+                try {
+                    const email = req.decoded.email;
 
-                if (!user || !allowedRoles.includes(user.role)) {
-                    return res.status(403).send({ message: "forbidden access" });
+                    const user = await usersCollection.findOne({ email });
+                    if (!user) {
+                        return res.status(404).send({ message: "User not found" });
+                    }
+
+                    // Admin bypass: admin can access all routes
+                    if (user.role === "admin" || allowedRoles.includes(user.role)) {
+                        return next();
+                    }
+
+                    return res.status(403).send({ message: "Forbidden access" });
+                } catch (error) {
+                    console.error("verifyRole error:", error);
+                    return res.status(500).send({ message: "Server error" });
                 }
-
-                next();
             };
         };
+
 
 
         // -----------------------USERS--------------------
@@ -123,7 +135,7 @@ async function run() {
         })
 
         // ✅ Get Users with search + filter + pagination // use in admin home
-        app.get("/users", async (req, res) => {
+        app.get("/users", verifyFBToken, verifyRole(["admin"]), async (req, res) => {
             try {
                 const { email, page = 1, limit = 10, search = "", role = "all" } = req.query;
 
@@ -181,6 +193,9 @@ async function run() {
 
         app.get("/users/search", verifyFBToken, verifyRole(["admin"]), async (req, res) => {
             const emailQuery = req.query.email;
+            const page = parseInt(req.query.page) || 0;
+            const limit = parseInt(req.query.limit) || 10;
+
             if (!emailQuery) {
                 return res.status(400).send({ message: "Missing email query" });
             }
@@ -188,17 +203,28 @@ async function run() {
             const regex = new RegExp(emailQuery, "i"); // case-insensitive partial match
 
             try {
+                const filter = { email: { $regex: regex } };
+
                 const users = await usersCollection
-                    .find({ email: { $regex: regex } })
-                    // .project({ email: 1, createdAt: 1, role: 1 })
-                    .limit(10)
+                    .find(filter)
+                    .skip(page * limit)
+                    .limit(limit)
                     .toArray();
-                res.send(users);
+
+                const count = await usersCollection.countDocuments(filter);
+
+                res.send({
+                    users,
+                    count,
+                    page,
+                    limit
+                });
             } catch (error) {
                 console.error("Error searching users", error);
                 res.status(500).send({ message: "Error searching users" });
             }
         });
+
 
         // GET: Get user role by email
         app.get('/users/:email/role', verifyFBToken, async (req, res) => {
@@ -224,7 +250,7 @@ async function run() {
         });
 
 
-        app.get('/users/:email', async (req, res) => {
+        app.get('/users/:email', verifyFBToken, async (req, res) => {
             try {
                 const { email } = req.params;
                 const user = await usersCollection.findOne({ email });
@@ -238,33 +264,33 @@ async function run() {
 
 
 
-        // app.patch("/users/:email", async (req, res) => {
-        //     const email = req.params.email;
-        //     const updateData = req.body;
+        app.patch("/users/:email", async (req, res) => {
+            const email = req.params.email;
+            const updateData = req.body;
 
-        //     delete updateData.email;
-        //     delete updateData.role;
+            delete updateData.email;
+            delete updateData.role;
 
-        //     try {
-        //         const result = await usersCollection.updateOne(
-        //             { email }, // find user by email
-        //             { $set: updateData } // update fields
+            try {
+                const result = await usersCollection.updateOne(
+                    { email }, // find user by email
+                    { $set: updateData } // update fields
 
-        //         );
+                );
 
-        //         res.send({
-        //             success: true,
-        //             message: "User updated successfully",
-        //             result,
-        //         });
-        //     } catch (err) {
-        //         res.status(500).send({
-        //             success: false,
-        //             message: "Failed to update user",
-        //             error: err.message,
-        //         });
-        //     }
-        // });
+                res.send({
+                    success: true,
+                    message: "User updated successfully",
+                    result,
+                });
+            } catch (err) {
+                res.status(500).send({
+                    success: false,
+                    message: "Failed to update user",
+                    error: err.message,
+                });
+            }
+        });
 
         app.patch("/users/:id/role", verifyFBToken, verifyRole(["admin"]), async (req, res) => {
             const { id } = req.params;
@@ -385,12 +411,20 @@ async function run() {
         app.get("/top-booked-packages", async (req, res) => {
             try {
                 const result = await bookingsCollection.aggregate([
-                    // Convert only if packageId is stored as string
+                    // Only include accepted and paid bookings
+                    {
+                        $match: {
+                            booking_status: "accepted",
+                            payment_status: "paid"
+                        }
+                    },
+                    // Convert packageId to ObjectId
                     {
                         $addFields: {
                             packageId: { $toObjectId: "$packageId" }
                         }
                     },
+                    // Group by packageId and count
                     {
                         $group: {
                             _id: "$packageId",
@@ -399,6 +433,7 @@ async function run() {
                     },
                     { $sort: { totalBookings: -1 } },
                     { $limit: 4 },
+                    // Join with packages collection
                     {
                         $lookup: {
                             from: "packages",
@@ -408,11 +443,12 @@ async function run() {
                         }
                     },
                     { $unwind: "$package" },
+                    // Select fields to return
                     {
                         $project: {
                             _id: "$package._id",
                             title: "$package.title",
-                            image: { $arrayElemAt: ["$package.images", 0] }, // first image
+                            image: { $arrayElemAt: ["$package.images", 0] },
                             description: "$package.about",
                             totalDays: "$package.totalDays",
                             price: "$package.price",
@@ -423,10 +459,11 @@ async function run() {
 
                 res.json(result);
             } catch (error) {
-                console.error("❌ Error fetching top booked packages:", error); // log full error
+                console.error("❌ Error fetching top booked packages:", error);
                 res.status(500).json({ error: error.message, stack: error.stack });
             }
         });
+
 
 
 
@@ -1089,6 +1126,7 @@ async function run() {
                         created_by: 1,
                         "payment.paid_at": 1,
                     })
+                    .sort({ "payment.paid_at": -1 })
                     .toArray();
 
                 // Transform for frontend use
@@ -1352,13 +1390,14 @@ async function run() {
 
         app.get("/stats", async (req, res) => {
             try {
-                // 1. Total Payment (sum of all payment amounts)
-                const payments = await paymentsCollection.aggregate([
-                    { $group: { _id: null, total: { $sum: "$amount" } } }
+                // 1. Total Payment (sum only paid bookings)
+                const payments = await bookingsCollection.aggregate([
+                    { $match: { payment_status: "paid" } }, // only paid bookings
+                    { $group: { _id: null, total: { $sum: "$payment.amount" } } }
                 ]).toArray();
                 const totalPayment = payments[0]?.total || 0;
 
-                // 2. Total Tour Guides (from guides collection)
+                // 2. Total Tour Guides (from users collection)
                 const totalGuides = await usersCollection.countDocuments({ role: "guide" });
 
                 // 3. Total Packages
@@ -1384,6 +1423,7 @@ async function run() {
             }
         });
 
+
         // GET /stats
 
 
@@ -1393,22 +1433,28 @@ async function run() {
 
                 const packageStats = await Promise.all(
                     packages.map(async (pkg) => {
-                        // Ensure we compare string IDs
+                        // Only paid bookings
                         const bookings = await bookingsCollection
-                            .find({ packageId: pkg._id.toString() })
+                            .find({
+                                packageId: pkg._id.toString(),
+                                payment_status: "paid" // filter paid bookings
+                            })
                             .toArray();
 
-                        const totalRevenue = bookings.reduce((sum, b) => sum + (b.price?.$numberInt ? parseInt(b.price.$numberInt) : b.price || 0), 0);
+                        const totalRevenue = bookings.reduce(
+                            (sum, b) => sum + (b.price?.$numberInt ? parseInt(b.price.$numberInt) : b.price || 0),
+                            0
+                        );
 
                         return {
-                            name: pkg.title, // use title, not name
+                            name: pkg.title, // use title
                             bookingsCount: bookings.length,
                             totalRevenue,
                         };
                     })
                 );
 
-                // Optionally sort by revenue descending
+                // Sort by revenue descending
                 packageStats.sort((a, b) => b.totalRevenue - a.totalRevenue);
 
                 res.json(packageStats);
@@ -1424,9 +1470,11 @@ async function run() {
 
 
 
+
         // Send a ping to confirm a successful connection
-        await client.db("admin").command({ ping: 1 });
-        console.log("Pinged your deployment. You successfully connected to MongoDB!");
+
+        // await client.db("admin").command({ ping: 1 });
+        // console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
         // await client.close();

@@ -1,6 +1,6 @@
+const dotenv = require('dotenv');
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const admin = require("firebase-admin");
 
@@ -10,29 +10,48 @@ const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY);
 const app = express();
 const port = process.env.PORT || 5000;
 
+
+const allowedOrigins = [
+    'http://localhost:5173',
+    process.env.CLIENT_URL_1,
+    process.env.CLIENT_URL_2
+];
 // Middleware
-app.use(cors());
+// app.use(cors());
+// app.use(cors({
+//     origin: 'http://localhost:5173',
+//     methods: ['GET', 'POST', 'PUT', 'DELETE'],
+//     credentials: true
+// }));
+
 app.use(cors({
-    origin: 'http://localhost:5173',
-    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    origin: (origin, callback) => {
+        // allow requests with no origin (like Postman) or if origin is in allowed list
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error(`CORS policy: origin ${origin} not allowed`));
+        }
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     credentials: true
 }));
+
 app.use(express.json());
 
 const decodedKey = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
-// const serviceAccount = JSON.parse(decodedKey);
+const serviceAccount = JSON.parse(decodedKey);
 
-const serviceAccount = require("./firebase-admin-key.json");
+// const serviceAccount = require("./firebase-admin-key.json");
 
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
 });
 
-
-
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.1l01jrg.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
+
 const client = new MongoClient(uri, {
     serverApi: {
         version: ServerApiVersion.v1,
@@ -43,15 +62,13 @@ const client = new MongoClient(uri, {
 
 async function run() {
     try {
-        // Connect the client to the server	(optional starting in v4.7)
-        // await client.connect();
 
         const db = client.db("exploreBD");
         const packagesCollection = db.collection("packages");
         const usersCollection = db.collection('users')
         const guidesCollection = db.collection('guides')
         const bookingsCollection = db.collection('bookings')
-        const paymentsCollection = db.collection('payments');
+        // const paymentsCollection = db.collection('payments');
         const storiesCollection = db.collection('stories');
 
         // ✅ Ensure index on status for faster filtering
@@ -80,15 +97,7 @@ async function run() {
                 return res.status(401).send({ message: 'unauthorized access' })
             }
         }
-        // const verifyAdmin = async (req, res, next) => {
-        //     const email = req.decoded.email;
-        //     const query = { email }
-        //     const user = await usersCollection.findOne(query);
-        //     if (!user || user.role !== 'admin') {
-        //         return res.status(403).send({ message: 'forbidden access' })
-        //     }
-        //     next();
-        // }
+
 
         const verifyRole = (allowedRoles) => {
             return async (req, res, next) => {
@@ -112,7 +121,6 @@ async function run() {
                 }
             };
         };
-
 
 
         // -----------------------USERS--------------------
@@ -406,6 +414,22 @@ async function run() {
                 res.status(500).send({ message: error.message });
             }
         });
+
+
+
+        // app.get("/packages/random", async (req, res) => {
+        //     try {
+        //         const packages = await packagesCollection.aggregate([{ $sample: { size: 3 } }]).toArray();
+        //         if (!packages.length) {
+        //             return res.status(404).json({ message: "No packages found" });
+        //         }
+        //         res.json(packages);
+        //     } catch (err) {
+        //         console.error("Error fetching random packages:", err);
+        //         res.status(500).json({ message: err.message });
+        //     }
+        // });
+
 
         // Place this BEFORE /packages/:id
         app.get("/top-booked-packages", async (req, res) => {
@@ -885,6 +909,23 @@ async function run() {
                 res.status(500).send({ message: error.message });
             }
         });
+
+        // app.get("/guides/random", async (req, res) => {
+        //     try {
+        //         const guides = await guidesCollection.aggregate([
+        //             { $match: { status: "active" } },
+        //             { $sample: { size: 6 } },
+        //         ]).toArray();
+        //         if (!guides.length) {
+        //             return res.status(404).json({ message: "No guides found" });
+        //         }
+        //         res.json(guides);
+        //     } catch (err) {
+        //         console.error("Error fetching random guides:", err);
+        //         res.status(500).json({ message: err.message });
+        //     }
+        // });
+
 
         // 4
         app.get("/guides/pending", verifyFBToken, verifyRole(["admin"]), async (req, res) => {
@@ -1466,18 +1507,8 @@ async function run() {
 
 
 
-
-
-
-
-
-        // Send a ping to confirm a successful connection
-
-        // await client.db("admin").command({ ping: 1 });
-        // console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
-        // await client.close();
     }
 }
 run().catch(console.dir);

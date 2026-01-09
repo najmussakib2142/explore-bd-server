@@ -60,19 +60,36 @@ const client = new MongoClient(uri, {
     }
 });
 
+let db;
+
+const connectDB = async () => {
+    await client.connect();
+    db = client.db("exploreBD");
+    console.log("MongoDB connected");
+};
+
+const getDB = () => {
+    if (!db) throw new Error("Database not initialized");
+    return db;
+};
+
 async function run() {
     try {
+        const database = getDB();
 
-        const db = client.db("exploreBD");
-        const packagesCollection = db.collection("packages");
-        const usersCollection = db.collection('users')
-        const guidesCollection = db.collection('guides')
-        const bookingsCollection = db.collection('bookings')
+        const packagesCollection = database.collection("packages");
+        const usersCollection = database.collection('users')
+        const guidesCollection = database.collection('guides')
+        const bookingsCollection = database.collection('bookings')
         // const paymentsCollection = db.collection('payments');
-        const storiesCollection = db.collection('stories');
+        const storiesCollection = database.collection('stories');
 
         // ✅ Ensure index on status for faster filtering
-        await guidesCollection.createIndex({ status: 1 });
+        try {
+            await guidesCollection.createIndex({ status: 1 });
+        } catch (err) {
+            console.warn("Index creation skipped:", err.message);
+        }
 
         const verifyFBToken = async (req, res, next) => {
             // console.log('header in middleware', req.headers);
@@ -97,7 +114,6 @@ async function run() {
                 return res.status(401).send({ message: 'unauthorized access' })
             }
         }
-
 
         const verifyRole = (allowedRoles) => {
             return async (req, res, next) => {
@@ -373,15 +389,6 @@ async function run() {
             }
         });
 
-        // ✅ GET: All packages
-        // app.get("/packages", async (req, res) => {
-        //     try {
-        //         const result = await packagesCollection.find().toArray();
-        //         res.send(result);
-        //     } catch (error) {
-        //         res.status(500).send({ message: error.message });
-        //     }
-        // });
 
         // GET all packages with pagination
         app.get("/packages", async (req, res) => {
@@ -1114,8 +1121,6 @@ async function run() {
         });
 
 
-
-
         // 10
         // PATCH /guides/approve/:id - approve a guide
         app.patch("/guides/approve/:id", async (req, res) => {
@@ -1140,11 +1145,7 @@ async function run() {
         });
 
 
-
-
         //_-------------- payment----------------
-
-
 
         // GET payments by user email
         app.get("/payments", verifyFBToken, verifyRole(["user"]), async (req, res) => {
@@ -1188,7 +1189,6 @@ async function run() {
         });
 
 
-
         app.post('/create-payment-intent', async (req, res) => {
             const amountInCents = req.body.amountInCents
             try {
@@ -1203,8 +1203,6 @@ async function run() {
                 res.status(500).json({ error: error.message });
             }
         });
-
-
 
 
         // ---------------- Stories-----------------
@@ -1246,7 +1244,6 @@ async function run() {
             ]).toArray();
             res.send(randomStories);
         });
-
 
         app.get("/stories", async (req, res) => {
             try {
@@ -1290,9 +1287,6 @@ async function run() {
                 res.status(500).json({ message: "Server error" });
             }
         });
-
-
-
 
         app.get("/stories/guide/:email", async (req, res) => {
             const { email } = req.params;
@@ -1342,7 +1336,6 @@ async function run() {
         });
 
 
-
         app.patch("/stories/:id/like", async (req, res) => {
             try {
                 const { id } = req.params;
@@ -1379,8 +1372,6 @@ async function run() {
 
         // PATCH /stories/:id
 
-
-
         // DELETE /stories/:id
         app.delete("/stories/:id", verifyFBToken, verifyRole(["user", "guide"]), async (req, res) => {
             try {
@@ -1400,34 +1391,6 @@ async function run() {
             }
         });
 
-
-
-
-
-        // app.post('/stories', async (req, res) => {
-        //     try {
-        //         const storyData = req.body;
-        //         // Validate required fields
-        //         const { title, content, images, author, role } = storyData;
-        //         if (!title || !content || !author) {
-        //             return res.status(400).json({ message: 'Title, content and author are required' });
-        //         }
-
-        //         // Add createdAt field
-        //         storyData.createdAt = new Date();
-
-        //         // Insert into MongoDB
-        //         const result = await storiesCollection.insertOne(storyData);
-
-        //         res.status(201).json({
-        //             message: 'Story added successfully',
-        //             insertedId: result.insertedId,
-        //         });
-        //     } catch (err) {
-        //         console.error('Error adding story:', err);
-        //         res.status(500).json({ message: 'Failed to add story' });
-        //     }
-        // });
 
         app.get("/stats", async (req, res) => {
             try {
@@ -1466,8 +1429,6 @@ async function run() {
 
 
         // GET /stats
-
-
         app.get("/stats/packages", async (req, res) => {
             try {
                 const packages = await packagesCollection.find().toArray();
@@ -1505,13 +1466,11 @@ async function run() {
             }
         });
 
-
-
-    } finally {
-        // Ensures that the client will close when you finish/error
+    } catch (error) {
+        console.error("Run error:", error);
+        process.exit(1);
     }
 }
-run().catch(console.dir);
 
 
 // Example route
@@ -1519,6 +1478,16 @@ app.get("/", (req, res) => {
     res.send("ExplorerBD Server is running 🚀");
 });
 
-app.listen(port, () => {
-    console.log(`ExplorerBD Server running on port ${port}`);
-});
+// app.listen(port, () => {
+//     console.log(`ExplorerBD Server running on port ${port}`);
+// });
+connectDB()
+    .then(run)
+    .then(() => {
+        app.listen(port, () => {
+            console.log(`Server running on port ${port}`);
+        });
+    })
+    .catch(err => {
+        console.error("Startup failed:", err);
+    })
